@@ -1,6 +1,6 @@
 name: astrbot_plugin_personal_network
 display_name: 人际网络
-desc: 按人格管理人物关系网络，并提供人物卡片与可视化 WebUI。
+desc: 按人格管理虚拟人生中的人物、关系与共同经历，并提供可视化 WebUI。
 version: 0.1.0
 author: Florance
 repo: ""

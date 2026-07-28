@@ -2,12 +2,13 @@ const bridge = window.AstrBotPluginPage;
 
 const uiText = {
   nothingSelected: "未选择项目", statusActive: "进行中", statusUncertain: "不确定", statusEnded: "已结束",
-  edit: "编辑", delete: "删除", strength: "关系强度", description: "关系描述", evidenceHistory: "证据记录",
+  edit: "编辑", delete: "删除", strength: "关系亲密度", description: "关系描述", lifeEvents: "共同经历",
   noDetails: "暂无详细资料", root: "人格", bio: "身份简介", personality: "性格", preferences: "偏好",
   facts: "重要事实", identities: "平台身份", nicknames: "常用昵称", relationships: "相关关系", notes: "管理员备注",
   uploadAvatar: "上传头像", noPeople: "当前人格还没有人物", missing: "人格已缺失", relationCount: "条关系",
   personCount: "个人物", saved: "已保存", deleted: "已删除", merged: "人物已合并", imported: "导入完成",
-  exported: "导出已开始", confirmDeletePerson: "删除该人物及其全部关系？", confirmDeleteRelation: "删除该关系及其证据？",
+  exported: "导出已开始", confirmDeletePerson: "删除该人物及其全部关系和经历？", confirmDeleteRelation: "删除该关系？",
+  confirmDeleteEvent: "删除该条人生经历？", interactionActivity: "互动状态", recentInteraction: "最近互动",
   confirmMerge: "重复人物会被删除，关系和身份将迁移到保留人物。继续？", invalidMerge: "请选择两个不同的人物",
   previewImport: "导入预检", confirmImport: "确认合并导入？不会删除本地数据。", loadFailed: "加载失败",
   actionFailed: "操作失败",
@@ -16,7 +17,7 @@ const uiText = {
 const state = {
   personas: [],
   persona: null,
-  network: { network: {}, characters: [], identities: [], relationships: [], evidence: [] },
+  network: { network: {}, characters: [], identities: [], relationships: [], life_events: [] },
   selected: null,
   cy: null,
   editingAliases: [],
@@ -29,6 +30,18 @@ const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&":
 const splitList = (value) => value.split(/[，,\n]/).map((item) => item.trim()).filter(Boolean);
 const byId = (id) => state.network.characters.find((item) => item.id === id);
 const aliasNames = (character) => (character.alias_usages || []).map((item) => item.alias);
+const eventParticipants = (item) => (item.participant_ids || []).map((id) => byId(id)?.name || "?").join("、");
+const eventTimeInput = (value) => {
+  const date = value ? new Date(value) : new Date();
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+};
+const eventRows = (events) => events.length
+  ? events.map((item) => `<div class="event-row"><button type="button" data-event-id="${esc(item.id)}"><strong>${esc(item.event_type)}</strong><div>${esc(item.summary)}</div><div class="relation-meta">${esc(new Date(item.occurred_at).toLocaleString("zh-CN"))} · ${esc(eventParticipants(item))}</div></button></div>`).join("")
+  : `<p>${esc(t("noDetails"))}</p>`;
+const interactionSummary = (stats) => stats?.last_interaction_at
+  ? `<p>${esc(stats.activity)} · ${esc(new Date(stats.last_interaction_at).toLocaleDateString("zh-CN"))}</p><div class="relation-meta">近 7 / 30 / 90 天：${stats.count_7d} / ${stats.count_30d} / ${stats.count_90d} 次</div>`
+  : `<p>暂无互动记录</p>`;
 
 function toast(message, error = false) {
   const item = document.createElement("div");
@@ -75,7 +88,8 @@ async function loadNetwork() {
 function renderSummary() {
   const people = state.network.characters.filter((item) => !item.is_persona).length;
   const relations = state.network.relationships.length;
-  $("#network-summary").textContent = `${people} ${t("personCount")} · ${relations} ${t("relationCount")}`;
+  const events = state.network.life_events.length;
+  $("#network-summary").textContent = `${people} ${t("personCount")} · ${relations} ${t("relationCount")} · ${events} 条经历`;
 }
 
 function graphElements() {
@@ -114,7 +128,7 @@ function renderGraph() {
       { selector: "node.persona-root", style: { width: 76, height: 76, "border-width": 4, "background-color": styles.getPropertyValue("--amber").trim(), "border-color": styles.getPropertyValue("--amber").trim() } },
       { selector: "node:selected", style: { "border-width": 5, "border-color": styles.getPropertyValue("--coral").trim() } },
       { selector: "edge", style: {
-        width: "mapData(strength, -100, 100, 1, 5)", "curve-style": "bezier", "target-arrow-shape": "triangle",
+        width: "mapData(strength, 0, 100, 1, 5)", "curve-style": "bezier", "target-arrow-shape": "triangle",
         "line-color": styles.getPropertyValue("--accent").trim(), "target-arrow-color": styles.getPropertyValue("--accent").trim(),
         label: "data(label)", "font-size": 9, color: styles.getPropertyValue("--muted").trim(), "text-background-color": styles.getPropertyValue("--surface").trim(),
         "text-background-opacity": 0.9, "text-background-padding": 3, "text-rotation": "autorotate",
@@ -167,38 +181,43 @@ function renderInspector() {
   if (state.selected.type === "relationship") {
     const relation = state.network.relationships.find((item) => item.id === state.selected.id);
     if (!relation) { state.selected = null; renderInspector(); return; }
-    const evidence = state.network.evidence.filter((item) => item.relationship_id === relation.id);
+    const events = state.network.life_events.filter((item) => [relation.source_id, relation.target_id].every((id) => item.participant_ids.includes(id))).slice(0, 10);
     panel.innerHTML = `
       <div class="profile-heading"><span class="status-badge ${esc(relation.status)}">${esc(t(`status${relation.status[0].toUpperCase()}${relation.status.slice(1)}`))}</span><h2>${esc(relation.relation_type)}</h2><p class="alias-line">${esc(relationshipLabel(relation))}</p></div>
       <div class="inspector-actions"><button class="primary-button" id="inspect-edit-relation">${esc(t("edit"))}</button><button class="danger-button" id="inspect-delete-relation">${esc(t("delete"))}</button></div>
       <div class="detail-section"><h3>${esc(t("strength"))}</h3><p>${relation.strength}</p></div>
       <div class="detail-section"><h3>${esc(t("description"))}</h3><p>${esc(relation.description || t("noDetails"))}</p></div>
-      <div class="detail-section"><h3>${esc(t("evidenceHistory"))}</h3>${evidence.length ? evidence.map((item) => `<div class="evidence-row">${esc(item.excerpt)}<div class="relation-meta">${esc(new Date(item.created_at).toLocaleString("zh-CN"))}</div></div>`).join("") : `<p>${esc(t("noDetails"))}</p>`}</div>`;
+      <div class="detail-section"><h3>${esc(t("interactionActivity"))}</h3>${interactionSummary(relation.interaction_stats)}</div>
+      <div class="detail-section"><h3>${esc(t("lifeEvents"))}</h3>${eventRows(events)}</div>`;
     $("#inspect-edit-relation").onclick = () => openRelationshipDialog(relation);
     $("#inspect-delete-relation").onclick = () => deleteRelationship(relation.id);
-    return;
+  } else {
+    const character = byId(state.selected.id);
+    if (!character) { state.selected = null; renderInspector(); return; }
+    const relations = state.network.relationships.filter((item) => item.source_id === character.id || item.target_id === character.id);
+    const identities = state.network.identities.filter((item) => item.character_id === character.id);
+    const events = state.network.life_events.filter((item) => item.participant_ids.includes(character.id)).slice(0, 10);
+    panel.innerHTML = `
+      <div class="profile-heading">${avatarMarkup(character, "large")}<h2>${esc(character.name)}</h2><p class="alias-line">${character.alias_usages?.length ? character.alias_usages.map((item) => `${esc(item.alias)} ×${item.use_count}`).join(" · ") : (character.is_persona ? esc(t("root")) : "")}</p></div>
+      <div class="inspector-actions"><button class="primary-button" id="inspect-edit-person">${esc(t("edit"))}</button><button class="secondary-button" id="inspect-avatar">${esc(t("uploadAvatar"))}</button>${character.is_persona ? "" : `<button class="danger-button" id="inspect-delete-person">${esc(t("delete"))}</button>`}</div>
+      <div class="detail-section"><h3>${esc(t("bio"))}</h3><p>${esc(character.bio || t("noDetails"))}</p></div>
+      <div class="detail-section"><h3>${esc(t("personality"))}</h3><p>${esc(character.personality || t("noDetails"))}</p></div>
+      <div class="detail-section"><h3>${esc(t("preferences"))}</h3><div class="tag-list">${character.preferences.map((item) => `<span class="tag">${esc(item)}</span>`).join("") || esc(t("noDetails"))}</div></div>
+      <div class="detail-section"><h3>${esc(t("facts"))}</h3><div class="tag-list">${character.facts.map((item) => `<span class="tag">${esc(item)}</span>`).join("") || esc(t("noDetails"))}</div></div>
+      ${identities.length ? `<div class="detail-section"><h3>${esc(t("identities"))}</h3>${identities.map((item) => `<div class="identity-row"><strong>${esc(item.nicknames?.[0]?.nickname || item.user_id)}</strong><div class="relation-meta">${esc(item.platform)} · ${esc(item.user_id)}${item.session_id ? ` · ${esc(item.session_id)}` : ""}</div>${item.nicknames?.length ? `<div class="tag-list nickname-list">${item.nicknames.map((nickname) => `<span class="tag" title="${esc(t("nicknames"))}">${esc(nickname.nickname)} ×${nickname.use_count}</span>`).join("")}</div>` : ""}</div>`).join("")}</div>` : ""}
+      <div class="detail-section"><h3>${esc(t("relationships"))}</h3>${relations.length ? relations.map((item) => `<div class="relation-row"><button data-relation-id="${esc(item.id)}"><strong>${esc(item.relation_type)}</strong><div class="relation-meta">${esc(relationshipLabel(item))} · 亲密度 ${item.strength} · ${esc(item.interaction_stats.activity)}</div></button></div>`).join("") : `<p>${esc(t("noDetails"))}</p>`}</div>
+      <div class="detail-section"><h3>${esc(t("lifeEvents"))}</h3>${eventRows(events)}</div>
+      ${character.notes ? `<div class="detail-section"><h3>${esc(t("notes"))}</h3><p>${esc(character.notes)}</p></div>` : ""}`;
+    $("#inspect-edit-person").onclick = () => openCharacterDialog(character);
+    $("#inspect-avatar").onclick = () => uploadAvatar(character.id);
+    const deleteButton = $("#inspect-delete-person");
+    if (deleteButton) deleteButton.onclick = () => deleteCharacter(character.id);
   }
-  const character = byId(state.selected.id);
-  if (!character) { state.selected = null; renderInspector(); return; }
-  const relations = state.network.relationships.filter((item) => item.source_id === character.id || item.target_id === character.id);
-  const identities = state.network.identities.filter((item) => item.character_id === character.id);
-  panel.innerHTML = `
-    <div class="profile-heading">${avatarMarkup(character, "large")}<h2>${esc(character.name)}</h2><p class="alias-line">${character.alias_usages?.length ? character.alias_usages.map((item) => `${esc(item.alias)} ×${item.use_count}`).join(" · ") : (character.is_persona ? esc(t("root")) : "")}</p></div>
-    <div class="inspector-actions"><button class="primary-button" id="inspect-edit-person">${esc(t("edit"))}</button><button class="secondary-button" id="inspect-avatar">${esc(t("uploadAvatar"))}</button></div>
-    <div class="detail-section"><h3>${esc(t("bio"))}</h3><p>${esc(character.bio || t("noDetails"))}</p></div>
-    <div class="detail-section"><h3>${esc(t("personality"))}</h3><p>${esc(character.personality || t("noDetails"))}</p></div>
-    <div class="detail-section"><h3>${esc(t("preferences"))}</h3><div class="tag-list">${character.preferences.map((item) => `<span class="tag">${esc(item)}</span>`).join("") || esc(t("noDetails"))}</div></div>
-    <div class="detail-section"><h3>${esc(t("facts"))}</h3><div class="tag-list">${character.facts.map((item) => `<span class="tag">${esc(item)}</span>`).join("") || esc(t("noDetails"))}</div></div>
-    ${identities.length ? `<div class="detail-section"><h3>${esc(t("identities"))}</h3>${identities.map((item) => `<div class="evidence-row"><strong>${esc(item.nicknames?.[0]?.nickname || item.user_id)}</strong><div class="relation-meta">${esc(item.platform)} · ${esc(item.user_id)}${item.session_id ? ` · ${esc(item.session_id)}` : ""}</div>${item.nicknames?.length ? `<div class="tag-list nickname-list">${item.nicknames.map((nickname) => `<span class="tag" title="${esc(t("nicknames"))}">${esc(nickname.nickname)} ×${nickname.use_count}</span>`).join("")}</div>` : ""}</div>`).join("")}</div>` : ""}
-    <div class="detail-section"><h3>${esc(t("relationships"))}</h3>${relations.length ? relations.map((item) => `<div class="relation-row"><button data-relation-id="${esc(item.id)}"><strong>${esc(item.relation_type)}</strong><div class="relation-meta">${esc(relationshipLabel(item))} · ${item.strength}</div></button></div>`).join("") : `<p>${esc(t("noDetails"))}</p>`}</div>
-    ${character.notes ? `<div class="detail-section"><h3>${esc(t("notes"))}</h3><p>${esc(character.notes)}</p></div>` : ""}
-    ${character.is_persona ? "" : `<div class="detail-section"><button class="danger-button" id="inspect-delete-person">${esc(t("delete"))}</button></div>`}`;
-  $("#inspect-edit-person").onclick = () => openCharacterDialog(character);
-  $("#inspect-avatar").onclick = () => uploadAvatar(character.id);
-  const deleteButton = $("#inspect-delete-person");
-  if (deleteButton) deleteButton.onclick = () => deleteCharacter(character.id);
   panel.querySelectorAll("[data-relation-id]").forEach((button) => {
     button.onclick = () => { state.selected = { type: "relationship", id: button.dataset.relationId }; renderInspector(); };
+  });
+  panel.querySelectorAll("[data-event-id]").forEach((button) => {
+    button.onclick = () => openLifeEventDialog(state.network.life_events.find((item) => item.id === button.dataset.eventId));
   });
 }
 
@@ -225,6 +244,7 @@ function openCharacterDialog(character = null) {
   $("#character-preferences").value = character?.preferences?.join("\n") || "";
   $("#character-facts").value = character?.facts?.join("\n") || "";
   $("#character-notes").value = character?.notes || "";
+  $("#delete-character-button").classList.toggle("hidden", !character || character.is_persona);
   $("#character-dialog").showModal();
 }
 
@@ -244,6 +264,23 @@ function renderAliasEditor() {
 function fillCharacterSelects() {
   const options = state.network.characters.map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join("");
   ["#relationship-source", "#relationship-target", "#merge-target", "#merge-duplicate"].forEach((selector) => { $(selector).innerHTML = options; });
+  $("#life-event-participants").innerHTML = options;
+}
+
+function openLifeEventDialog(item = null) {
+  fillCharacterSelects();
+  $("#life-event-form").reset();
+  $("#life-event-id").value = item?.id || "";
+  $("#life-event-time").value = eventTimeInput(item?.occurred_at);
+  $("#life-event-type").value = item?.event_type || "";
+  $("#life-event-summary").value = item?.summary || "";
+  $("#life-event-importance").value = item?.importance ?? 50;
+  $("#life-event-importance-output").value = item?.importance ?? 50;
+  $("#life-event-tone").value = item?.emotional_tone || "";
+  const selected = new Set(item?.participant_ids || [state.network.characters.find((character) => character.is_persona)?.id].filter(Boolean));
+  [...$("#life-event-participants").options].forEach((option) => { option.selected = selected.has(option.value); });
+  $("#delete-life-event-button").classList.toggle("hidden", !item);
+  $("#life-event-dialog").showModal();
 }
 
 function openRelationshipDialog(relation = null) {
@@ -257,7 +294,6 @@ function openRelationshipDialog(relation = null) {
   $("#relationship-strength").value = relation?.strength ?? 0;
   $("#strength-output").value = relation?.strength ?? 0;
   $("#relationship-description").value = relation?.description || "";
-  $("#relationship-evidence").value = "";
   $("#delete-relationship-button").classList.toggle("hidden", !relation);
   $("#relationship-dialog").showModal();
 }
@@ -266,7 +302,15 @@ async function deleteCharacter(id) {
   if (!window.confirm(t("confirmDeletePerson"))) return;
   try {
     await bridge.apiPost("character/delete", { persona_id: state.persona.persona_id, character_id: id });
-    toast(t("deleted")); await loadNetwork();
+    $("#character-dialog").close(); state.selected = null; toast(t("deleted")); await loadNetwork();
+  } catch (error) { toast(`${t("actionFailed")}: ${error.message}`, true); }
+}
+
+async function deleteLifeEvent(id) {
+  if (!window.confirm(t("confirmDeleteEvent"))) return;
+  try {
+    await bridge.apiPost("life-event/delete", { persona_id: state.persona.persona_id, event_id: id });
+    $("#life-event-dialog").close(); toast(t("deleted")); await loadNetwork();
   } catch (error) { toast(`${t("actionFailed")}: ${error.message}`, true); }
 }
 
@@ -314,9 +358,13 @@ function bindEvents() {
   $("#add-person-button").onclick = () => openCharacterDialog();
   $("#add-alias-button").onclick = () => { state.editingAliases.push({ alias: "", use_count: 1, last_used_at: "" }); renderAliasEditor(); $("#character-aliases .alias-row:last-child .alias-name")?.focus(); };
   $("#add-relation-button").onclick = () => openRelationshipDialog();
+  $("#add-life-event-button").onclick = () => openLifeEventDialog();
   $("#merge-button").onclick = () => { fillCharacterSelects(); $("#merge-dialog").showModal(); };
   $("#relationship-strength").oninput = (event) => { $("#strength-output").value = event.target.value; };
+  $("#life-event-importance").oninput = (event) => { $("#life-event-importance-output").value = event.target.value; };
+  $("#delete-character-button").onclick = () => deleteCharacter($("#character-id").value);
   $("#delete-relationship-button").onclick = () => deleteRelationship($("#relationship-id").value);
+  $("#delete-life-event-button").onclick = () => deleteLifeEvent($("#life-event-id").value);
 
   $("#character-form").onsubmit = async (event) => {
     event.preventDefault();
@@ -344,9 +392,26 @@ function bindEvents() {
       persona_id: state.persona.persona_id, id: $("#relationship-id").value || undefined,
       source, target, type: $("#relationship-type").value.trim(), strength: Number($("#relationship-strength").value),
       status: $("#relationship-status").value, description: $("#relationship-description").value.trim(),
-      evidence: $("#relationship-evidence").value.trim(),
     };
     try { await bridge.apiPost("relationship/save", payload); $("#relationship-dialog").close(); toast(t("saved")); await loadNetwork(); }
+    catch (error) { toast(`${t("actionFailed")}: ${error.message}`, true); }
+  };
+
+  $("#life-event-form").onsubmit = async (event) => {
+    event.preventDefault();
+    const participants = [...$("#life-event-participants").selectedOptions].map((option) => option.value);
+    if (new Set(participants).size < 2) { toast("人生经历至少需要两名参与人物", true); return; }
+    const payload = {
+      persona_id: state.persona.persona_id,
+      id: $("#life-event-id").value || undefined,
+      occurred_at: new Date($("#life-event-time").value).toISOString(),
+      type: $("#life-event-type").value.trim(),
+      participants,
+      summary: $("#life-event-summary").value.trim(),
+      importance: Number($("#life-event-importance").value),
+      emotional_tone: $("#life-event-tone").value.trim(),
+    };
+    try { await bridge.apiPost("life-event/save", payload); $("#life-event-dialog").close(); toast(t("saved")); await loadNetwork(); }
     catch (error) { toast(`${t("actionFailed")}: ${error.message}`, true); }
   };
 
@@ -376,7 +441,7 @@ function bindEvents() {
         toast(`${t("previewImport")}: ${preview.conflicts.join("; ")}`, true);
         return;
       }
-      const details = `${t("previewImport")}\n${preview.new_characters} + ${preview.updated_characters} ↻ ${t("personCount")}\n${preview.new_relationships} + ${preview.updated_relationships} ↻ ${t("relationCount")}\n\n${t("confirmImport")}`;
+      const details = `${t("previewImport")}\n${preview.new_characters} + ${preview.updated_characters} ↻ ${t("personCount")}\n${preview.new_relationships} + ${preview.updated_relationships} ↻ ${t("relationCount")}\n${preview.new_life_events} + ${preview.updated_life_events} ↻ 条经历\n\n${t("confirmImport")}`;
       if (window.confirm(details)) {
         await bridge.apiPost("import/apply", { token: preview.token });
         toast(t("imported")); await loadNetwork();

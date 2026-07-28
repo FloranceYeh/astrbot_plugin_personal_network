@@ -52,6 +52,7 @@
               <option value="ended">已结束</option>
             </select>
             <button id="fit-button" class="tool-button" type="button"><span aria-hidden="true">◎</span><span>适应画布</span></button>
+            <button id="add-life-event-button" class="tool-button" type="button"><span aria-hidden="true">＋</span><span>添加经历</span></button>
             <button id="add-relation-button" class="tool-button" type="button"><span aria-hidden="true">＋</span><span>添加关系</span></button>
           </div>
           <div class="graph-workspace">
@@ -106,6 +107,8 @@
           <label class="full"><span>管理员备注</span><textarea id="character-notes" maxlength="4000"></textarea></label>
         </div>
         <div class="dialog-actions">
+          <button id="delete-character-button" class="danger-button hidden" type="button">删除人物</button>
+          <span class="dialog-spacer"></span>
           <button class="secondary-button close-dialog" type="button">取消</button>
           <button class="primary-button" type="submit">保存</button>
         </div>
@@ -124,12 +127,35 @@
           <label><span>关联人物（是谁）</span><select id="relationship-target" required></select></label>
           <label><span>关联人物的身份</span><input id="relationship-type" maxlength="100" required /></label>
           <label><span>状态</span><select id="relationship-status"><option value="active">进行中</option><option value="uncertain">不确定</option><option value="ended">已结束</option></select></label>
-          <label class="full"><span>关系强度</span><div class="range-row"><input id="relationship-strength" type="range" min="-100" max="100" value="0" /><output id="strength-output">0</output></div></label>
+          <label class="full"><span>关系亲密度</span><div class="range-row"><input id="relationship-strength" type="range" min="0" max="100" value="0" /><output id="strength-output">0</output></div></label>
           <label class="full"><span>关系描述</span><textarea id="relationship-description" maxlength="2000"></textarea></label>
-          <label class="full"><span>新增证据摘录</span><textarea id="relationship-evidence" maxlength="300"></textarea></label>
         </div>
         <div class="dialog-actions">
           <button id="delete-relationship-button" class="danger-button hidden" type="button">删除</button>
+          <span class="dialog-spacer"></span>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="life-event-dialog">
+      <form id="life-event-form" method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">人生经历</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <input id="life-event-id" type="hidden" />
+        <div class="form-grid">
+          <label><span>发生时间</span><input id="life-event-time" type="datetime-local" required /></label>
+          <label><span>类型</span><input id="life-event-type" maxlength="100" required placeholder="见面、通话、聚餐、争执" /></label>
+          <label class="full"><span>参与人物</span><select id="life-event-participants" multiple required></select></label>
+          <label><span>重要度</span><div class="range-row"><input id="life-event-importance" type="range" min="0" max="100" value="50" /><output id="life-event-importance-output">50</output></div></label>
+          <label><span>情绪基调</span><input id="life-event-tone" maxlength="100" placeholder="温暖、紧张、平静" /></label>
+          <label class="full"><span>经历摘要</span><textarea id="life-event-summary" maxlength="2000" required></textarea></label>
+        </div>
+        <div class="dialog-actions">
+          <button id="delete-life-event-button" class="danger-button hidden" type="button">删除经历</button>
           <span class="dialog-spacer"></span>
           <button class="secondary-button close-dialog" type="button">取消</button>
           <button class="primary-button" type="submit">保存</button>

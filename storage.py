@@ -6,13 +6,15 @@ import json
 import sqlite3
 import threading
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 VALID_RELATIONSHIP_STATUSES = {"active", "ended", "uncertain"}
 CHARACTER_TEXT_FIELDS = ("bio", "personality", "notes")
 CHARACTER_LIST_FIELDS = ("preferences", "facts")
+SCHEMA_VERSION = 4
+CONVERSATION_SESSION_MINUTES = 30
 
 
 class NetworkStorage:
@@ -41,7 +43,7 @@ class NetworkStorage:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
-                INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('version', '3');
+                INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('version', '4');
 
                 CREATE TABLE IF NOT EXISTS networks (
                     persona_id TEXT PRIMARY KEY,
@@ -100,7 +102,7 @@ class NetworkStorage:
                     source_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
                     target_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
                     relation_type TEXT NOT NULL,
-                    strength INTEGER NOT NULL DEFAULT 0 CHECK(strength BETWEEN -100 AND 100),
+                    strength INTEGER NOT NULL DEFAULT 0 CHECK(strength BETWEEN 0 AND 100),
                     status TEXT NOT NULL DEFAULT 'active',
                     description TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
@@ -110,24 +112,81 @@ class NetworkStorage:
                 CREATE INDEX IF NOT EXISTS idx_relationships_persona
                     ON relationships(persona_id);
 
-                CREATE TABLE IF NOT EXISTS evidence (
+                CREATE TABLE IF NOT EXISTS life_events (
                     id TEXT PRIMARY KEY,
-                    relationship_id TEXT NOT NULL REFERENCES relationships(id) ON DELETE CASCADE,
-                    excerpt TEXT NOT NULL,
-                    umo TEXT NOT NULL DEFAULT '',
-                    speaker_id TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL
+                    persona_id TEXT NOT NULL REFERENCES networks(persona_id) ON DELETE CASCADE,
+                    occurred_at TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    importance INTEGER NOT NULL DEFAULT 50 CHECK(importance BETWEEN 0 AND 100),
+                    emotional_tone TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
-                CREATE INDEX IF NOT EXISTS idx_evidence_relationship
-                    ON evidence(relationship_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_life_events_persona_time
+                    ON life_events(persona_id, occurred_at DESC);
+
+                CREATE TABLE IF NOT EXISTS life_event_participants (
+                    event_id TEXT NOT NULL REFERENCES life_events(id) ON DELETE CASCADE,
+                    character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+                    PRIMARY KEY(event_id, character_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_life_event_participants_character
+                    ON life_event_participants(character_id, event_id);
                 """
             )
             version_row = self._conn.execute(
                 "SELECT value FROM schema_meta WHERE key = 'version'"
             ).fetchone()
-            if not version_row or int(version_row["value"]) != 3:
+            version = int(version_row["value"]) if version_row else 0
+            if version not in {3, SCHEMA_VERSION}:
                 raise RuntimeError(
                     "personal network database schema is incompatible; remove the database and restart the plugin"
+                )
+            if version == 3:
+                evidence_table = self._conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'evidence'"
+                ).fetchone()
+                if evidence_table:
+                    rows = self._conn.execute(
+                        """SELECT e.*, r.persona_id, r.source_id, r.target_id
+                           FROM evidence e JOIN relationships r ON r.id = e.relationship_id
+                           ORDER BY e.created_at"""
+                    ).fetchall()
+                    for row in rows:
+                        event_id = str(uuid.uuid4())
+                        occurred_at = str(row["created_at"] or self._now())
+                        self._conn.execute(
+                            """INSERT INTO life_events
+                               (id, persona_id, occurred_at, event_type, summary, importance,
+                                emotional_tone, source, created_at, updated_at)
+                               VALUES (?, ?, ?, ?, ?, 50, '', 'migrated_evidence', ?, ?)""",
+                            (
+                                event_id,
+                                row["persona_id"],
+                                occurred_at,
+                                "关系经历",
+                                row["excerpt"],
+                                occurred_at,
+                                occurred_at,
+                            ),
+                        )
+                        self._conn.executemany(
+                            """INSERT INTO life_event_participants(event_id, character_id)
+                               VALUES (?, ?)""",
+                            [
+                                (event_id, row["source_id"]),
+                                (event_id, row["target_id"]),
+                            ],
+                        )
+                    self._conn.execute("DROP TABLE evidence")
+                self._conn.execute(
+                    "UPDATE relationships SET strength = 0 WHERE strength < 0"
+                )
+                self._conn.execute(
+                    "UPDATE schema_meta SET value = ? WHERE key = 'version'",
+                    (str(SCHEMA_VERSION),),
                 )
 
     @staticmethod
@@ -315,9 +374,15 @@ class NetworkStorage:
                 "SELECT * FROM relationships WHERE persona_id = ? ORDER BY updated_at DESC",
                 (persona_id,),
             ).fetchall()
-            evidence = self._conn.execute(
-                """SELECT e.* FROM evidence e JOIN relationships r ON r.id = e.relationship_id
-                   WHERE r.persona_id = ? ORDER BY e.created_at DESC""",
+            life_events = self._conn.execute(
+                """SELECT * FROM life_events WHERE persona_id = ?
+                   ORDER BY occurred_at DESC, created_at DESC""",
+                (persona_id,),
+            ).fetchall()
+            event_participants = self._conn.execute(
+                """SELECT p.* FROM life_event_participants p
+                   JOIN life_events e ON e.id = p.event_id
+                   WHERE e.persona_id = ?""",
                 (persona_id,),
             ).fetchall()
         nickname_map: dict[str, list[dict[str, Any]]] = {}
@@ -329,12 +394,80 @@ class NetworkStorage:
             item = dict(row)
             item["nicknames"] = nickname_map.get(str(item["id"]), [])
             identity_data.append(item)
+        participant_map: dict[str, list[str]] = {}
+        for row in event_participants:
+            participant_map.setdefault(str(row["event_id"]), []).append(
+                str(row["character_id"])
+            )
+        event_data = []
+        for row in life_events:
+            item = dict(row)
+            item["participant_ids"] = participant_map.get(str(item["id"]), [])
+            event_data.append(item)
+        now = datetime.now(UTC)
+        relationship_data = []
+        for row in relationships:
+            relation = dict(row)
+            shared_events = []
+            endpoints = {str(relation["source_id"]), str(relation["target_id"])}
+            for event in event_data:
+                if not endpoints.issubset(set(event["participant_ids"])):
+                    continue
+                try:
+                    occurred_at = datetime.fromisoformat(
+                        str(event["occurred_at"]).replace("Z", "+00:00")
+                    )
+                    if occurred_at.tzinfo is None:
+                        occurred_at = occurred_at.replace(tzinfo=UTC)
+                except ValueError:
+                    continue
+                occurred_at = occurred_at.astimezone(UTC)
+                if occurred_at > now:
+                    continue
+                shared_events.append((event, occurred_at))
+            counts = {
+                "7d": sum(
+                    now - occurred <= timedelta(days=7) for _, occurred in shared_events
+                ),
+                "30d": sum(
+                    now - occurred <= timedelta(days=30)
+                    for _, occurred in shared_events
+                ),
+                "90d": sum(
+                    now - occurred <= timedelta(days=90)
+                    for _, occurred in shared_events
+                ),
+            }
+            last_interaction_at = (
+                shared_events[0][1].isoformat() if shared_events else None
+            )
+            if not shared_events:
+                activity = "无互动记录"
+            else:
+                days_since = max(0, (now - shared_events[0][1]).days)
+                if days_since <= 7 and counts["30d"] >= 4:
+                    activity = "频繁"
+                elif days_since <= 30:
+                    activity = "正常"
+                elif days_since <= 90:
+                    activity = "较少"
+                else:
+                    activity = "长期未联系"
+            relation["interaction_stats"] = {
+                "last_interaction_at": last_interaction_at,
+                "count_7d": counts["7d"],
+                "count_30d": counts["30d"],
+                "count_90d": counts["90d"],
+                "activity": activity,
+                "recent_events": [item for item, _ in shared_events[:3]],
+            }
+            relationship_data.append(relation)
         return {
             "network": dict(network) if network else {},
             "characters": [self._character_dict(row) for row in characters],
             "identities": identity_data,
-            "relationships": [dict(row) for row in relationships],
-            "evidence": [dict(row) for row in evidence],
+            "relationships": relationship_data,
+            "life_events": event_data,
         }
 
     def _resolve_character(
@@ -446,6 +579,95 @@ class NetworkStorage:
             )
         return True
 
+    def record_sender_interaction(
+        self,
+        persona_id: str,
+        *,
+        platform: str,
+        user_id: str,
+        session_id: str,
+    ) -> str | None:
+        """Record or extend a conversation session with a bound sender.
+
+        Args:
+            persona_id: Owning persona identifier.
+            platform: AstrBot platform name.
+            user_id: Platform user identifier.
+            session_id: Group identifier, or an empty string for private chat.
+
+        Returns:
+            Created or updated life event ID, or ``None`` for an unknown sender.
+        """
+        now_dt = datetime.now(UTC)
+        now = now_dt.isoformat()
+        with self._lock, self._conn:
+            identity = self._conn.execute(
+                """SELECT i.character_id, c.name FROM external_identities i
+                   JOIN characters c ON c.id = i.character_id
+                   WHERE i.persona_id = ? AND i.platform = ? AND i.user_id = ?
+                   ORDER BY CASE WHEN i.session_id = ? THEN 0 ELSE 1 END LIMIT 1""",
+                (persona_id, platform, user_id, session_id),
+            ).fetchone()
+            if not identity:
+                return None
+            root_id = self._root_id(persona_id)
+            character_id = str(identity["character_id"])
+            if character_id == root_id:
+                return None
+            latest = self._conn.execute(
+                """SELECT e.id, e.occurred_at FROM life_events e
+                   JOIN life_event_participants root_participant
+                     ON root_participant.event_id = e.id AND root_participant.character_id = ?
+                   JOIN life_event_participants sender_participant
+                     ON sender_participant.event_id = e.id AND sender_participant.character_id = ?
+                   WHERE e.persona_id = ? AND e.source = 'conversation'
+                   ORDER BY e.occurred_at DESC LIMIT 1""",
+                (root_id, character_id, persona_id),
+            ).fetchone()
+            if latest:
+                try:
+                    latest_at = datetime.fromisoformat(
+                        str(latest["occurred_at"]).replace("Z", "+00:00")
+                    )
+                    if latest_at.tzinfo is None:
+                        latest_at = latest_at.replace(tzinfo=UTC)
+                except ValueError:
+                    latest_at = now_dt - timedelta(days=1)
+                if now_dt - latest_at.astimezone(UTC) <= timedelta(
+                    minutes=CONVERSATION_SESSION_MINUTES
+                ):
+                    self._conn.execute(
+                        """UPDATE life_events SET occurred_at = ?, updated_at = ?
+                           WHERE id = ?""",
+                        (now, now, latest["id"]),
+                    )
+                    return str(latest["id"])
+            event_id = str(uuid.uuid4())
+            root = self._conn.execute(
+                "SELECT name FROM characters WHERE id = ?", (root_id,)
+            ).fetchone()
+            root_name = str(root["name"] if root else persona_id)
+            self._conn.execute(
+                """INSERT INTO life_events
+                   (id, persona_id, occurred_at, event_type, summary, importance,
+                    emotional_tone, source, created_at, updated_at)
+                   VALUES (?, ?, ?, '对话', ?, 30, '', 'conversation', ?, ?)""",
+                (
+                    event_id,
+                    persona_id,
+                    now,
+                    f"{root_name} 与 {identity['name']} 进行了对话",
+                    now,
+                    now,
+                ),
+            )
+            self._conn.executemany(
+                """INSERT INTO life_event_participants(event_id, character_id)
+                   VALUES (?, ?)""",
+                [(event_id, root_id), (event_id, character_id)],
+            )
+            return event_id
+
     def record_alias_mentions(self, persona_id: str, text: str) -> int:
         """Increment each character alias mentioned in one message.
 
@@ -490,7 +712,8 @@ class NetworkStorage:
         self,
         persona_id: str,
         characters: list[dict[str, Any]],
-        relationships: list[dict[str, Any]],
+        relationships: list[dict[str, Any]] | None = None,
+        interactions: list[dict[str, Any]] | None = None,
         *,
         sender: dict[str, str] | None = None,
         allow_notes: bool = False,
@@ -501,6 +724,7 @@ class NetworkStorage:
             persona_id: Target AstrBot persona identifier.
             characters: Character patches with optional request-local refs.
             relationships: Directed relationship patches.
+            interactions: Life events with two or more participant references.
             sender: Trusted current event identity used by ``current_sender``.
             allow_notes: Whether administrator-only notes may be changed.
 
@@ -510,14 +734,17 @@ class NetworkStorage:
         Raises:
             ValueError: If references, ownership, or field values are invalid.
         """
-        if len(characters) > 20 or len(relationships) > 30:
+        relationships = relationships or []
+        interactions = interactions or []
+        if len(characters) > 20 or len(relationships) > 30 or len(interactions) > 30:
             raise ValueError(
-                "a batch may contain at most 20 characters and 30 relationships"
+                "a batch may contain at most 20 characters, 30 relationships, and 30 interactions"
             )
         root_id = self.ensure_network(persona_id)
         now = self._now()
         refs: dict[str, str] = {"persona": root_id}
         relationship_ids: list[str] = []
+        event_ids: list[str] = []
         with self._lock, self._conn:
             for raw in characters:
                 if not isinstance(raw, dict):
@@ -690,10 +917,8 @@ class NetworkStorage:
                     raise ValueError(
                         "relationship strength must be an integer"
                     ) from exc
-                if strength < -100 or strength > 100:
-                    raise ValueError(
-                        "relationship strength must be between -100 and 100"
-                    )
+                if strength < 0 or strength > 100:
+                    raise ValueError("relationship strength must be between 0 and 100")
                 status = str(raw.get("status") or "active")
                 if status not in VALID_RELATIONSHIP_STATUSES:
                     raise ValueError("invalid relationship status")
@@ -750,27 +975,113 @@ class NetworkStorage:
                             now,
                         ),
                     )
-                excerpt = str(raw.get("evidence") or "").strip()[:300]
-                if excerpt:
+                relationship_ids.append(relationship_id)
+            for raw in interactions:
+                if not isinstance(raw, dict):
+                    raise ValueError("each interaction must be an object")
+                participants = raw.get("participants", [])
+                if not isinstance(participants, list):
+                    raise ValueError("interaction participants must be a list")
+                participant_ids = list(
+                    dict.fromkeys(resolve_endpoint(value) for value in participants)
+                )
+                if len(participant_ids) < 2 or len(participant_ids) > 20:
+                    raise ValueError(
+                        "an interaction requires between 2 and 20 unique participants"
+                    )
+                occurred_raw = str(raw.get("occurred_at") or now).strip()
+                try:
+                    occurred_at = datetime.fromisoformat(
+                        occurred_raw.replace("Z", "+00:00")
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        "interaction occurred_at must be ISO 8601"
+                    ) from exc
+                if occurred_at.tzinfo is None:
+                    occurred_at = occurred_at.replace(tzinfo=UTC)
+                occurred_value = occurred_at.astimezone(UTC).isoformat()
+                event_type = str(raw.get("type") or "").strip()[:100]
+                summary = str(raw.get("summary") or "").strip()[:2000]
+                if not event_type or not summary:
+                    raise ValueError("interaction type and summary are required")
+                try:
+                    importance = int(raw.get("importance", 50))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "interaction importance must be an integer"
+                    ) from exc
+                if importance < 0 or importance > 100:
+                    raise ValueError("interaction importance must be between 0 and 100")
+                emotional_tone = str(raw.get("emotional_tone") or "").strip()[:100]
+                event_id = str(raw.get("id") or "").strip()
+                existing_event = None
+                if event_id:
+                    existing_event = self._conn.execute(
+                        "SELECT * FROM life_events WHERE id = ? AND persona_id = ?",
+                        (event_id, persona_id),
+                    ).fetchone()
+                    if not existing_event:
+                        raise ValueError("interaction does not belong to this persona")
+                else:
+                    event_id = str(uuid.uuid4())
+                source = (
+                    str(existing_event["source"])
+                    if existing_event
+                    else ("webui" if allow_notes else "llm")
+                )
+                if existing_event:
                     self._conn.execute(
-                        """INSERT INTO evidence
-                           (id, relationship_id, excerpt, umo, speaker_id, created_at)
-                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        """UPDATE life_events SET occurred_at = ?, event_type = ?, summary = ?,
+                           importance = ?, emotional_tone = ?, updated_at = ? WHERE id = ?""",
                         (
-                            str(uuid.uuid4()),
-                            relationship_id,
-                            excerpt,
-                            sender.get("umo", "") if sender else "",
-                            sender.get("user_id", "") if sender else "",
+                            occurred_value,
+                            event_type,
+                            summary,
+                            importance,
+                            emotional_tone,
+                            now,
+                            event_id,
+                        ),
+                    )
+                    self._conn.execute(
+                        "DELETE FROM life_event_participants WHERE event_id = ?",
+                        (event_id,),
+                    )
+                else:
+                    self._conn.execute(
+                        """INSERT INTO life_events
+                           (id, persona_id, occurred_at, event_type, summary, importance,
+                            emotional_tone, source, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            event_id,
+                            persona_id,
+                            occurred_value,
+                            event_type,
+                            summary,
+                            importance,
+                            emotional_tone,
+                            source,
+                            now,
                             now,
                         ),
                     )
-                relationship_ids.append(relationship_id)
+                self._conn.executemany(
+                    """INSERT INTO life_event_participants(event_id, character_id)
+                       VALUES (?, ?)""",
+                    [(event_id, character_id) for character_id in participant_ids],
+                )
+                event_ids.append(event_id)
             self._conn.execute(
                 "UPDATE networks SET updated_at = ? WHERE persona_id = ?",
                 (now, persona_id),
             )
-        return {"refs": refs, "relationship_ids": relationship_ids}
+        return {
+            "refs": refs,
+            "relationship_ids": relationship_ids,
+            "event_ids": event_ids,
+        }
 
     def delete_character(self, persona_id: str, character_id: str) -> str | None:
         """Delete a non-root character and return its avatar filename."""
@@ -783,6 +1094,12 @@ class NetworkStorage:
                 raise ValueError("character not found")
             if row["is_persona"]:
                 raise ValueError("the persona root cannot be deleted")
+            self._conn.execute(
+                """DELETE FROM life_events WHERE id IN (
+                       SELECT event_id FROM life_event_participants WHERE character_id = ?
+                   )""",
+                (character_id,),
+            )
             self._conn.execute("DELETE FROM characters WHERE id = ?", (character_id,))
         return row["avatar_filename"]
 
@@ -795,6 +1112,24 @@ class NetworkStorage:
             )
             if not cursor.rowcount:
                 raise ValueError("relationship not found")
+
+    def delete_life_event(self, persona_id: str, event_id: str) -> None:
+        """Delete one life event owned by a persona.
+
+        Args:
+            persona_id: Owning persona identifier.
+            event_id: Life event UUID.
+
+        Raises:
+            ValueError: If the event does not exist for the persona.
+        """
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                "DELETE FROM life_events WHERE id = ? AND persona_id = ?",
+                (event_id, persona_id),
+            )
+            if not cursor.rowcount:
+                raise ValueError("life event not found")
 
     def merge_characters(
         self, persona_id: str, target_id: str, duplicate_id: str
@@ -900,10 +1235,6 @@ class NetworkStorage:
                 ).fetchone()
                 if conflict:
                     self._conn.execute(
-                        "UPDATE evidence SET relationship_id = ? WHERE relationship_id = ?",
-                        (conflict["id"], relation["id"]),
-                    )
-                    self._conn.execute(
                         "DELETE FROM relationships WHERE id = ?", (relation["id"],)
                     )
                 else:
@@ -969,6 +1300,35 @@ class NetworkStorage:
                         "UPDATE external_identities SET character_id = ?, updated_at = ? WHERE id = ?",
                         (target_id, now, identity["id"]),
                     )
+            for participant in self._conn.execute(
+                "SELECT event_id FROM life_event_participants WHERE character_id = ?",
+                (duplicate_id,),
+            ).fetchall():
+                target_exists = self._conn.execute(
+                    """SELECT 1 FROM life_event_participants
+                       WHERE event_id = ? AND character_id = ?""",
+                    (participant["event_id"], target_id),
+                ).fetchone()
+                if target_exists:
+                    self._conn.execute(
+                        """DELETE FROM life_event_participants
+                           WHERE event_id = ? AND character_id = ?""",
+                        (participant["event_id"], duplicate_id),
+                    )
+                else:
+                    self._conn.execute(
+                        """UPDATE life_event_participants SET character_id = ?
+                           WHERE event_id = ? AND character_id = ?""",
+                        (target_id, participant["event_id"], duplicate_id),
+                    )
+            self._conn.execute(
+                """DELETE FROM life_events WHERE persona_id = ? AND id IN (
+                       SELECT e.id FROM life_events e
+                       LEFT JOIN life_event_participants p ON p.event_id = e.id
+                       WHERE e.persona_id = ? GROUP BY e.id HAVING COUNT(p.character_id) < 2
+                   )""",
+                (persona_id, persona_id),
+            )
             self._conn.execute("DELETE FROM characters WHERE id = ?", (duplicate_id,))
         if target["avatar_filename"]:
             return duplicate["avatar_filename"]
@@ -996,6 +1356,9 @@ class NetworkStorage:
         persona_id: str,
         candidate_texts: list[str],
         *,
+        platform: str = "",
+        user_id: str = "",
+        session_id: str = "",
         max_characters: int,
         max_relationships: int,
         max_chars: int,
@@ -1005,6 +1368,9 @@ class NetworkStorage:
         Args:
             persona_id: Target AstrBot persona identifier.
             candidate_texts: Texts ordered from highest to lowest matching priority.
+            platform: Current sender platform for trusted identity matching.
+            user_id: Current sender platform identifier.
+            session_id: Current group session, or an empty string for private chat.
             max_characters: Maximum directly matched characters.
             max_relationships: Maximum one-hop relationships.
             max_chars: Maximum returned context length.
@@ -1016,8 +1382,31 @@ class NetworkStorage:
             return ""
         data = self.get_network(persona_id)
         matches: list[dict[str, Any]] = []
+        if platform and user_id:
+            identities = [
+                item
+                for item in data["identities"]
+                if item["platform"] == platform and item["user_id"] == user_id
+            ]
+            identity = next(
+                (item for item in identities if item["session_id"] == session_id),
+                identities[0] if identities else None,
+            )
+            if identity:
+                sender_character = next(
+                    (
+                        item
+                        for item in data["characters"]
+                        if item["id"] == identity["character_id"]
+                        and not item["is_persona"]
+                    ),
+                    None,
+                )
+                if sender_character:
+                    matches.append(sender_character)
         for text in candidate_texts:
             folded = text.casefold()
+            text_matches = []
             for character in data["characters"]:
                 if character["is_persona"]:
                     continue
@@ -1026,8 +1415,12 @@ class NetworkStorage:
                     *[item["alias"] for item in character["alias_usages"]],
                 ]
                 if any(name and name.casefold() in folded for name in names):
-                    matches.append(character)
-            if matches:
+                    text_matches.append(character)
+            if text_matches:
+                known_ids = {item["id"] for item in matches}
+                matches.extend(
+                    item for item in text_matches if item["id"] not in known_ids
+                )
                 break
         if not matches:
             return ""
@@ -1070,13 +1463,27 @@ class NetworkStorage:
             target_name = by_id.get(relation["target_id"], "未知人物")
             lines.append(
                 f"关系事实：{target_name} 是 {source_name} 的“{relation['relation_type']}”"
-                f"（强度={relation['strength']}，状态={relation['status']}）"
+                f"（亲密度={relation['strength']}，状态={relation['status']}）"
                 + (
                     f"；描述={relation['description']}"
                     if relation["description"]
                     else ""
                 )
             )
+            stats = relation["interaction_stats"]
+            if stats["last_interaction_at"]:
+                lines.append(
+                    "互动概况：最后互动="
+                    + stats["last_interaction_at"][:10]
+                    + f"；近7/30/90天={stats['count_7d']}/{stats['count_30d']}/{stats['count_90d']}次"
+                    + f"；活跃状态={stats['activity']}"
+                )
+                for event in stats["recent_events"]:
+                    lines.append(
+                        f"共同经历：{event['occurred_at'][:10]} {event['event_type']}；{event['summary']}"
+                    )
+            else:
+                lines.append("互动概况：暂无共同经历记录。")
         lines.append("</personal_network_context>")
         return "\n".join(lines)[:max_chars]
 
@@ -1101,7 +1508,8 @@ class NetworkStorage:
         if not query:
             people = [item for item in characters if not item["is_persona"]]
             lines = [
-                f"当前人格的人际网络共有 {len(people)} 个人物、{len(relationships)} 条关系。"
+                f"当前人格的人际网络共有 {len(people)} 个人物、{len(relationships)} 条关系、"
+                f"{len(data['life_events'])} 条人生经历。"
             ]
             if people:
                 lines.append(
@@ -1126,7 +1534,7 @@ class NetworkStorage:
                 }.get(relation["status"], relation["status"])
                 lines.append(
                     f"- {target['name']} 是 {source['name']} 的{relation['relation_type']}"
-                    f"（强度 {relation['strength']}，{status}）"
+                    f"（亲密度 {relation['strength']}，{status}，互动{relation['interaction_stats']['activity']}）"
                 )
             return "\n".join(lines)[:max_chars]
 
@@ -1165,6 +1573,10 @@ class NetworkStorage:
             ):
                 if character[field]:
                     lines.append(f"{label}：{character[field]}")
+            if character["preferences"]:
+                lines.append("偏好：" + "；".join(character["preferences"]))
+            if character["facts"]:
+                lines.append("重要事实：" + "；".join(character["facts"]))
             related = [
                 item
                 for item in relationships
@@ -1187,8 +1599,21 @@ class NetworkStorage:
                 }.get(relation["status"], relation["status"])
                 lines.append(
                     f"- {target['name']} 是 {source['name']} 的{relation['relation_type']}"
-                    f"（强度 {relation['strength']}，{status}）{description}"
+                    f"（亲密度 {relation['strength']}，{status}）{description}"
                 )
+                stats = relation["interaction_stats"]
+                if stats["last_interaction_at"]:
+                    lines.append(
+                        f"  最近互动 {stats['last_interaction_at'][:10]}；"
+                        f"近7/30/90天 {stats['count_7d']}/{stats['count_30d']}/{stats['count_90d']} 次；"
+                        f"{stats['activity']}"
+                    )
+                    for event in stats["recent_events"]:
+                        lines.append(
+                            f"  - {event['occurred_at'][:10]} {event['event_type']}：{event['summary']}"
+                        )
+                else:
+                    lines.append("  暂无共同经历记录。")
         return "\n".join(lines)[:max_chars]
 
     def import_conflicts(self, persona_id: str, payload: dict[str, Any]) -> list[str]:
@@ -1196,7 +1621,7 @@ class NetworkStorage:
 
         Args:
             persona_id: Destination persona identifier.
-            payload: Structurally validated version-three export.
+            payload: Structurally validated version-four export.
 
         Returns:
             Human-readable conflicts that require manual resolution.
@@ -1284,12 +1709,20 @@ class NetworkStorage:
                     conflicts.append(
                         f"identity {item['id']} duplicates local identity {existing['id']}"
                     )
+            for item in payload.get("life_events", []):
+                owner = self._conn.execute(
+                    "SELECT persona_id FROM life_events WHERE id = ?", (item["id"],)
+                ).fetchone()
+                if owner and owner["persona_id"] != persona_id:
+                    conflicts.append(
+                        f"life event UUID {item['id']} belongs to another persona"
+                    )
         return conflicts
 
     def replace_from_import(
         self, persona_id: str, payload: dict[str, Any]
     ) -> dict[str, int]:
-        """Merge a validated version-three export by UUID without deleting local rows."""
+        """Merge a validated version-four export by UUID without deleting local rows."""
         conflicts = self.import_conflicts(persona_id, payload)
         if conflicts:
             raise ValueError(
@@ -1297,7 +1730,7 @@ class NetworkStorage:
             )
         characters = payload.get("characters", [])
         relationships = payload.get("relationships", [])
-        evidence = payload.get("evidence", [])
+        life_events = payload.get("life_events", [])
         identities = payload.get("identities", [])
         self.ensure_network(persona_id)
         now = self._now()
@@ -1394,27 +1827,48 @@ class NetworkStorage:
                         now,
                     ),
                 )
-            relationship_ids = {
-                row["id"]
-                for row in self._conn.execute(
-                    "SELECT id FROM relationships WHERE persona_id = ?", (persona_id,)
-                ).fetchall()
-            }
-            for item in evidence:
-                if item["relationship_id"] not in relationship_ids:
+            for item in life_events:
+                participant_ids = list(
+                    dict.fromkeys(
+                        id_map.get(character_id, character_id)
+                        for character_id in item.get("participant_ids", [])
+                    )
+                )
+                if len(participant_ids) < 2 or any(
+                    character_id not in character_ids
+                    for character_id in participant_ids
+                ):
                     continue
                 self._conn.execute(
-                    """INSERT OR IGNORE INTO evidence
-                       (id, relationship_id, excerpt, umo, speaker_id, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO life_events
+                       (id, persona_id, occurred_at, event_type, summary, importance,
+                        emotional_tone, source, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(id) DO UPDATE SET occurred_at=excluded.occurred_at,
+                        event_type=excluded.event_type, summary=excluded.summary,
+                        importance=excluded.importance, emotional_tone=excluded.emotional_tone,
+                        source=excluded.source, updated_at=excluded.updated_at""",
                     (
                         item["id"],
-                        item["relationship_id"],
-                        str(item["excerpt"])[:300],
-                        str(item.get("umo", ""))[:500],
-                        str(item.get("speaker_id", ""))[:200],
+                        persona_id,
+                        str(item["occurred_at"]),
+                        str(item["event_type"])[:100],
+                        str(item["summary"])[:2000],
+                        max(0, min(100, int(item.get("importance", 50)))),
+                        str(item.get("emotional_tone", ""))[:100],
+                        str(item.get("source", "import"))[:50],
+                        str(item.get("created_at") or now),
                         str(item.get("created_at") or now),
                     ),
+                )
+                self._conn.execute(
+                    "DELETE FROM life_event_participants WHERE event_id = ?",
+                    (item["id"],),
+                )
+                self._conn.executemany(
+                    """INSERT INTO life_event_participants(event_id, character_id)
+                       VALUES (?, ?)""",
+                    [(item["id"], character_id) for character_id in participant_ids],
                 )
             for item in identities:
                 character_id = id_map.get(item["character_id"], item["character_id"])
@@ -1492,7 +1946,7 @@ class NetworkStorage:
         return {
             "characters": len(characters),
             "relationships": len(relationships),
-            "evidence": len(evidence),
+            "life_events": len(life_events),
             "identities": len(identities),
         }
 

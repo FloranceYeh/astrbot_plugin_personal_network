@@ -91,8 +91,9 @@ select { min-height: 36px; padding: 0 32px 0 10px; }
 .detail-section p { margin: 0; font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
 .tag-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag { padding: 3px 7px; border-radius: 4px; background: var(--surface-alt); color: var(--text); font-size: 11px; }
-.relation-row, .evidence-row { padding: 9px 0; border-top: 1px solid var(--border); font-size: 12px; }
+.relation-row, .identity-row, .event-row { padding: 9px 0; border-top: 1px solid var(--border); font-size: 12px; }
 .relation-row button { width: 100%; padding: 0; border: 0; background: transparent; color: var(--text); text-align: left; }
+.event-row button { width: 100%; padding: 0; border: 0; background: transparent; color: var(--text); text-align: left; }
 .relation-meta { color: var(--muted); margin-top: 3px; }
 .nickname-list { margin-top: 7px; }
 
@@ -131,6 +132,7 @@ dialog form { padding: 0 22px 20px; }
 .alias-count input { padding-left: 40px; }
 .alias-empty { padding: 10px; border: 1px dashed var(--border); border-radius: 6px; color: var(--muted); font-size: 12px; text-align: center; }
 .form-grid input, .form-grid textarea, .form-grid select { width: 100%; min-height: 38px; padding: 8px 10px; }
+.form-grid select[multiple] { min-height: 132px; padding: 6px; }
 .form-grid textarea { min-height: 76px; resize: vertical; }
 .range-row { gap: 12px; }
 .range-row input { padding: 0; }

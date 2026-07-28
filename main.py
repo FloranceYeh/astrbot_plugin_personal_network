@@ -9,6 +9,7 @@ import io
 import json
 import re
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,8 @@ class PersonalNetworkPlugin(Star):
             ("character/merge", self.api_merge_characters, ["POST"]),
             ("relationship/save", self.api_save_relationship, ["POST"]),
             ("relationship/delete", self.api_delete_relationship, ["POST"]),
+            ("life-event/save", self.api_save_life_event, ["POST"]),
+            ("life-event/delete", self.api_delete_life_event, ["POST"]),
             ("avatar/<character_id>", self.api_avatar, ["GET", "POST"]),
             ("export", self.api_export, ["GET"]),
             ("import/<persona_key>/preview", self.api_import_preview, ["POST"]),
@@ -181,6 +184,13 @@ class PersonalNetworkPlugin(Star):
             session_id=str(event.get_group_id() or ""),
             nickname=str(event.get_sender_name() or ""),
         )
+        await asyncio.to_thread(
+            self.storage.record_sender_interaction,
+            persona_id,
+            platform=platform,
+            user_id=user_id,
+            session_id=str(event.get_group_id() or ""),
+        )
         req.system_prompt += "\n\nYou have access to update_personal_network"
         if query_tool_enabled:
             req.system_prompt += " and query_personal_network"
@@ -252,6 +262,9 @@ class PersonalNetworkPlugin(Star):
             self.storage.build_context,
             persona_id,
             match_texts,
+            platform=platform,
+            user_id=user_id,
+            session_id=str(event.get_group_id() or ""),
             max_characters=self._config_int("context_max_characters", 8, 1, 20),
             max_relationships=self._config_int("context_max_relationships", 16, 1, 50),
             max_chars=self._config_int("context_max_chars", 6000, 500, 12000),
@@ -276,8 +289,9 @@ class PersonalNetworkPlugin(Star):
     async def update_personal_network(
         self,
         event: AstrMessageEvent,
-        characters: list[dict[str, Any]],
-        relationships: list[dict[str, Any]],
+        characters: list[dict[str, Any]] | None = None,
+        relationships: list[dict[str, Any]] | None = None,
+        interactions: list[dict[str, Any]] | None = None,
     ) -> str:
         """Record explicit, durable people and relationships for the current persona.
 
@@ -286,25 +300,38 @@ class PersonalNetworkPlugin(Star):
         sensitive information.
 
         Args:
-            characters (list[dict]): Character upserts, at most 20. Each object needs
-                `ref` and `name`; optional keys are `id`, `aliases`, `bio`,
-                `personality`, `preferences`, `facts`, and `current_sender`. Use
-                `current_sender` only to bind the trusted current message sender.
-            relationships (list[dict]): Directed relationship upserts, at most 30.
+            characters (list[dict], optional): Character upserts, at most 20. Each
+                object needs `ref` and `name`; optional keys are `id`, `aliases`,
+                `bio`, `personality`, `preferences`, `facts`, and `current_sender`.
+                Use `current_sender` only to bind the trusted current message sender.
+            relationships (list[dict], optional): Directed relationship upserts, at
+                most 30. Omit this argument when only updating characters or recording
+                interactions.
                 Each object needs `source`, `target`, `type`, `strength`, `status`,
-                `description`, and `evidence`; `id` is optional. Source and target
-                accept a character UUID, a request-local character ref, or `persona`.
+                and `description`; `id` is optional. Source and target accept a
+                character UUID, a request-local character ref, or `persona`.
                 The type states who the target is to the source, such as father,
-                friend, or crush; use a role noun rather than an action.
-                Strength ranges from -100 to 100, status is active, ended, or
-                uncertain, and evidence must quote the current message within 300
-                characters.
+                friend, or crush; use a role noun rather than an action. Strength is
+                long-term closeness from 0 to 100, independent of recent contact.
+            interactions (list[dict], optional): Explicit life events, at most 30.
+                Each object needs `participants`, `type`, and `summary`; optional keys
+                are `occurred_at`, `importance`, and `emotional_tone`. Participants are
+                character UUIDs, request-local refs, or `persona`. Record only events
+                clearly established by the conversation, never mere mentions or plans.
 
         Returns:
             JSON summary of resolved references and updated relationships.
         """
         if not bool(self.config.get("enabled", True)):
             return json.dumps({"updated": False, "reason": "plugin disabled"})
+        characters = characters or []
+        relationships = relationships or []
+        interactions = interactions or []
+        if not characters and not relationships and not interactions:
+            return json.dumps(
+                {"updated": False, "reason": "no network updates supplied"},
+                ensure_ascii=False,
+            )
         persona_id = await self._resolve_persona_id(event.unified_msg_origin)
         await asyncio.to_thread(self.storage.ensure_network, persona_id, persona_id)
         if not await asyncio.to_thread(self.storage.is_enabled, persona_id):
@@ -325,11 +352,20 @@ class PersonalNetworkPlugin(Star):
                 persona_id,
                 characters,
                 relationships,
+                interactions,
                 sender=sender,
                 allow_notes=False,
             )
         except ValueError as exc:
             return json.dumps({"updated": False, "error": str(exc)}, ensure_ascii=False)
+        if any(item.get("current_sender") for item in characters):
+            await asyncio.to_thread(
+                self.storage.record_sender_interaction,
+                persona_id,
+                platform=sender["platform"],
+                user_id=sender["user_id"],
+                session_id=sender["session_id"],
+            )
         return json.dumps({"updated": True, **result}, ensure_ascii=False)
 
     @filter.llm_tool(name="query_personal_network")
@@ -514,6 +550,36 @@ class PersonalNetworkPlugin(Star):
         except ValueError as exc:
             return error_response(str(exc))
 
+    async def api_save_life_event(self):
+        """Create or update one life event from the administrator WebUI."""
+        try:
+            payload = await self._json_payload()
+            persona_id = str(payload.pop("persona_id", "")).strip()
+            result = await asyncio.to_thread(
+                self.storage.upsert_batch,
+                persona_id,
+                [],
+                [],
+                [payload],
+                allow_notes=True,
+            )
+            return json_response(result)
+        except ValueError as exc:
+            return error_response(str(exc))
+
+    async def api_delete_life_event(self):
+        """Delete one life event from the administrator WebUI."""
+        try:
+            payload = await self._json_payload()
+            await asyncio.to_thread(
+                self.storage.delete_life_event,
+                str(payload.get("persona_id") or ""),
+                str(payload.get("event_id") or ""),
+            )
+            return json_response({"deleted": True})
+        except ValueError as exc:
+            return error_response(str(exc))
+
     async def api_avatar(self, character_id: str):
         """Read or replace a normalized character avatar."""
         if request.method == "GET":
@@ -607,18 +673,20 @@ class PersonalNetworkPlugin(Star):
             (self.avatar_dir / filename).unlink(missing_ok=True)
 
     async def api_export(self):
-        """Download a complete version-three JSON export for one persona."""
+        """Download a complete version-four JSON export for one persona."""
         persona_id = str(request.query.get("persona_id", "")).strip()
         if not persona_id:
             return error_response("persona_id is required")
         payload = await asyncio.to_thread(self.storage.get_network, persona_id)
-        payload["schema_version"] = 3
+        payload["schema_version"] = 4
         payload["persona_id"] = persona_id
         for character in payload["characters"]:
             character["avatar_data"] = self._avatar_data(
                 character.get("avatar_filename")
             )
             character.pop("avatar_filename", None)
+        for relationship in payload["relationships"]:
+            relationship.pop("interaction_stats", None)
         path = self.export_dir / f"{uuid.uuid4().hex}.json"
         path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -652,7 +720,7 @@ class PersonalNetworkPlugin(Star):
             raise ValueError("invalid persona key") from exc
 
     def _validate_import(self, payload: Any) -> dict[str, Any]:
-        """Validate one current schema version-three import.
+        """Validate one current schema version-four import.
 
         Args:
             payload: Parsed JSON export candidate.
@@ -663,12 +731,21 @@ class PersonalNetworkPlugin(Star):
         Raises:
             ValueError: If structure, references, values, or images are invalid.
         """
-        if not isinstance(payload, dict) or payload.get("schema_version") != 3:
-            raise ValueError("only schema_version 3 exports are supported")
-        required_lists = ("characters", "identities", "relationships", "evidence")
+        if not isinstance(payload, dict) or payload.get("schema_version") != 4:
+            raise ValueError("only schema_version 4 exports are supported")
+        required_lists = (
+            "characters",
+            "identities",
+            "relationships",
+            "life_events",
+        )
         if any(not isinstance(payload.get(key), list) for key in required_lists):
             raise ValueError("export arrays are missing or invalid")
-        if len(payload["characters"]) > 5000 or len(payload["relationships"]) > 20000:
+        if (
+            len(payload["characters"]) > 5000
+            or len(payload["relationships"]) > 20000
+            or len(payload["life_events"]) > 50000
+        ):
             raise ValueError("import exceeds network item limits")
         character_ids: set[str] = set()
         for item in payload["characters"]:
@@ -732,7 +809,6 @@ class PersonalNetworkPlugin(Star):
                 if count < 1:
                     raise ValueError("nickname use_count must be positive")
                 nickname["use_count"] = count
-        relationship_ids: set[str] = set()
         for item in payload["relationships"]:
             if not isinstance(item, dict):
                 raise ValueError("every relationship must be an object")
@@ -744,14 +820,45 @@ class PersonalNetworkPlugin(Star):
             if item.get("status") not in VALID_RELATIONSHIP_STATUSES:
                 raise ValueError("relationship has an invalid status")
             strength = int(item.get("strength", 0))
-            if strength < -100 or strength > 100:
+            if strength < 0 or strength > 100:
                 raise ValueError("relationship strength is out of range")
             uuid.UUID(str(item.get("id")))
-            relationship_ids.add(str(item["id"]))
-        for item in payload["evidence"]:
-            if item.get("relationship_id") not in relationship_ids:
-                raise ValueError("evidence references an unknown relationship")
-        payload["schema_version"] = 3
+        for item in payload["life_events"]:
+            if not isinstance(item, dict):
+                raise ValueError("every life event must be an object")
+            try:
+                uuid.UUID(str(item.get("id")))
+                occurred_at = datetime.fromisoformat(
+                    str(item.get("occurred_at") or "").replace("Z", "+00:00")
+                )
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise ValueError(
+                    "every life event requires a UUID and ISO 8601 occurred_at"
+                ) from exc
+            if occurred_at.tzinfo is None:
+                occurred_at = occurred_at.replace(tzinfo=UTC)
+            item["occurred_at"] = occurred_at.astimezone(UTC).isoformat()
+            participant_ids = item.get("participant_ids", [])
+            if (
+                not isinstance(participant_ids, list)
+                or len(set(participant_ids)) < 2
+                or any(
+                    character_id not in character_ids
+                    for character_id in participant_ids
+                )
+            ):
+                raise ValueError(
+                    "life event participants must reference at least two characters"
+                )
+            if (
+                not str(item.get("event_type") or "").strip()
+                or not str(item.get("summary") or "").strip()
+            ):
+                raise ValueError("every life event requires a type and summary")
+            importance = int(item.get("importance", 50))
+            if importance < 0 or importance > 100:
+                raise ValueError("life event importance is out of range")
+        payload["schema_version"] = 4
         return payload
 
     @staticmethod
@@ -805,6 +912,7 @@ class PersonalNetworkPlugin(Star):
             existing_relationship_ids = {
                 item["id"] for item in existing["relationships"]
             }
+            existing_event_ids = {item["id"] for item in existing["life_events"]}
             token = uuid.uuid4().hex
             self._import_previews[token] = (persona_id, payload)
             return json_response(
@@ -829,6 +937,15 @@ class PersonalNetworkPlugin(Star):
                     "updated_relationships": sum(
                         item["id"] in existing_relationship_ids
                         for item in payload["relationships"]
+                    ),
+                    "life_events": len(payload["life_events"]),
+                    "new_life_events": sum(
+                        item["id"] not in existing_event_ids
+                        for item in payload["life_events"]
+                    ),
+                    "updated_life_events": sum(
+                        item["id"] in existing_event_ids
+                        for item in payload["life_events"]
                     ),
                 }
             )

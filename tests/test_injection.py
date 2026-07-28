@@ -69,6 +69,12 @@ async def test_current_name_injects_without_history(position: str):
     await plugin.inject_network_context(make_event("ALFRED 是谁"), request)
 
     assert plugin.storage.build_context.call_args.args[1] == ["ALFRED 是谁"]
+    assert plugin.storage.build_context.call_args.kwargs["platform"] == "webchat"
+    assert plugin.storage.build_context.call_args.kwargs["user_id"] == "user"
+    assert plugin.storage.build_context.call_args.kwargs["session_id"] == ""
+    plugin.storage.record_sender_interaction.assert_called_once_with(
+        "Caranlaf", platform="webchat", user_id="user", session_id=""
+    )
     if position == "system_prompt":
         assert "父亲" in request.system_prompt
         assert request.extra_user_content_parts == []
