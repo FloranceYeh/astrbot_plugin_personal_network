@@ -5,6 +5,12 @@
     "hint": "启用 LLM 更新工具和每轮相关人物上下文注入。",
     "default": true
   },
+  "enable_llm_query_tool": {
+    "description": "启用 LLM 主动查询工具",
+    "type": "bool",
+    "hint": "关闭后模型看不到 query_personal_network 工具，聊天命令 /关系查询 仍可使用。",
+    "default": true
+  },
   "context_injection_position": {
     "description": "关系注入位置",
     "type": "string",

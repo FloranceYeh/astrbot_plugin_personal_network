@@ -51,3 +51,45 @@ async def test_injection_position_and_recent_context_matching(position: str):
         assert request.extra_user_content_parts[0].text == (
             "<personal_network_context>父亲</personal_network_context>"
         )
+
+
+@pytest.mark.asyncio
+async def test_disabled_llm_query_tool_is_removed_from_request():
+    plugin = object.__new__(PersonalNetworkPlugin)
+    plugin.config = {
+        "enabled": True,
+        "enable_llm_query_tool": False,
+    }
+    plugin.storage = MagicMock()
+    plugin.storage.is_enabled.return_value = False
+    plugin.storage.build_context.return_value = ""
+    plugin._resolve_persona_id = AsyncMock(return_value="Caranlaf")
+
+    event = MagicMock()
+    event.unified_msg_origin = "webchat:FriendMessage:test"
+    event.message_str = "你好"
+    event.get_platform_name.return_value = "webchat"
+    event.get_platform_id.return_value = "webchat"
+    event.get_sender_id.return_value = "user"
+    event.get_group_id.return_value = ""
+    event.get_sender_name.return_value = "User"
+    request = ProviderRequest(prompt="你好", system_prompt="base", contexts=[])
+    request.func_tool = MagicMock()
+
+    await plugin.inject_network_context(event, request)
+
+    request.func_tool.remove_tool.assert_called_once_with("query_personal_network")
+    assert "query_personal_network" not in request.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_disabled_llm_query_tool_rejects_direct_calls():
+    plugin = object.__new__(PersonalNetworkPlugin)
+    plugin.config = {
+        "enabled": True,
+        "enable_llm_query_tool": False,
+    }
+
+    result = await plugin.query_personal_network(MagicMock(), "Alfred")
+
+    assert result == "LLM 主动查询人际网络工具已禁用。"
