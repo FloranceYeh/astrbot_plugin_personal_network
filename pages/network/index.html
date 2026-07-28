@@ -3,39 +3,39 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Personal Network</title>
+    <title>人物关系网络</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <div id="app" class="app-shell">
       <header class="topbar">
         <div class="brand-block">
-          <div class="brand-mark">PN</div>
+          <div class="brand-mark">人</div>
           <div>
-            <h1 data-i18n="heading">人际网络</h1>
-            <p id="network-summary">0 people · 0 relations</p>
+            <h1>人际网络</h1>
+            <p id="network-summary">0 个人物 · 0 条关系</p>
           </div>
         </div>
         <div class="topbar-actions">
           <label class="persona-picker">
-            <span data-i18n="persona">人格</span>
+            <span>人格</span>
             <select id="persona-select"></select>
           </label>
           <label class="switch-control">
             <input id="network-enabled" type="checkbox" />
             <span class="switch-track" aria-hidden="true"></span>
-            <span data-i18n="enabled">启用</span>
+            <span>启用</span>
           </label>
-          <button id="refresh-button" class="icon-button" type="button" title="Refresh" aria-label="Refresh">↻</button>
-          <button id="export-button" class="icon-button" type="button" title="Export" aria-label="Export">↓</button>
-          <button id="import-button" class="icon-button" type="button" title="Import" aria-label="Import">↑</button>
+          <button id="refresh-button" class="icon-button" type="button" title="刷新" aria-label="刷新">↻</button>
+          <button id="export-button" class="icon-button" type="button" title="导出" aria-label="导出">↓</button>
+          <button id="import-button" class="icon-button" type="button" title="导入" aria-label="导入">↑</button>
           <input id="import-file" type="file" accept="application/json,.json" hidden />
         </div>
       </header>
 
-      <nav class="tabs" aria-label="Views">
-        <button class="tab active" type="button" data-view="graph" data-i18n="graph">关系网络</button>
-        <button class="tab" type="button" data-view="people" data-i18n="people">人物卡片</button>
+      <nav class="tabs" aria-label="视图">
+        <button class="tab active" type="button" data-view="graph">关系网络</button>
+        <button class="tab" type="button" data-view="people">人物卡片</button>
       </nav>
 
       <main>
@@ -43,23 +43,23 @@
           <div class="graph-toolbar">
             <div class="search-field">
               <span aria-hidden="true">⌕</span>
-              <input id="graph-search" type="search" placeholder="搜索人物或关系" data-i18n-placeholder="search" />
+              <input id="graph-search" type="search" placeholder="搜索人物或关系" />
             </div>
-            <select id="status-filter" aria-label="Relationship status">
-              <option value="" data-i18n="allStatuses">全部状态</option>
-              <option value="active" data-i18n="statusActive">进行中</option>
-              <option value="uncertain" data-i18n="statusUncertain">不确定</option>
-              <option value="ended" data-i18n="statusEnded">已结束</option>
+            <select id="status-filter" aria-label="关系状态">
+              <option value="">全部状态</option>
+              <option value="active">进行中</option>
+              <option value="uncertain">不确定</option>
+              <option value="ended">已结束</option>
             </select>
-            <button id="fit-button" class="tool-button" type="button"><span aria-hidden="true">◎</span><span data-i18n="fit">适应画布</span></button>
-            <button id="add-relation-button" class="tool-button" type="button"><span aria-hidden="true">＋</span><span data-i18n="addRelation">添加关系</span></button>
+            <button id="fit-button" class="tool-button" type="button"><span aria-hidden="true">◎</span><span>适应画布</span></button>
+            <button id="add-relation-button" class="tool-button" type="button"><span aria-hidden="true">＋</span><span>添加关系</span></button>
           </div>
           <div class="graph-workspace">
-            <div id="network-graph" role="img" aria-label="Relationship network"></div>
+            <div id="network-graph" role="img" aria-label="人物关系网络"></div>
             <aside id="inspector" class="inspector empty">
               <div class="empty-state">
                 <div class="empty-glyph">⌁</div>
-                <h2 data-i18n="nothingSelected">未选择项目</h2>
+                <h2>未选择项目</h2>
               </div>
             </aside>
           </div>
@@ -69,11 +69,11 @@
           <div class="people-toolbar">
             <div class="search-field">
               <span aria-hidden="true">⌕</span>
-              <input id="people-search" type="search" placeholder="搜索人物" data-i18n-placeholder="searchPeople" />
+              <input id="people-search" type="search" placeholder="搜索人物" />
             </div>
             <div class="people-actions">
-              <button id="merge-button" class="secondary-button" type="button" data-i18n="merge">合并人物</button>
-              <button id="add-person-button" class="primary-button" type="button"><span aria-hidden="true">＋</span><span data-i18n="addPerson">添加人物</span></button>
+              <button id="merge-button" class="secondary-button" type="button">合并人物</button>
+              <button id="add-person-button" class="primary-button" type="button"><span aria-hidden="true">＋</span><span>添加人物</span></button>
             </div>
           </div>
           <div id="people-grid" class="people-grid"></div>
@@ -86,22 +86,22 @@
     <dialog id="character-dialog">
       <form id="character-form" method="dialog">
         <div class="dialog-title-row">
-          <h2 class="dialog-title" data-i18n="personDetails">人物信息</h2>
-          <button class="icon-button close-dialog" type="button" aria-label="Close">×</button>
+          <h2 class="dialog-title">人物信息</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
         </div>
         <input id="character-id" type="hidden" />
         <div class="form-grid">
-          <label><span data-i18n="name">姓名</span><input id="character-name" maxlength="100" required /></label>
-          <label><span data-i18n="aliases">昵称</span><input id="character-aliases" maxlength="1000" /></label>
-          <label class="full"><span data-i18n="bio">身份简介</span><textarea id="character-bio" maxlength="4000"></textarea></label>
-          <label class="full"><span data-i18n="personality">性格</span><textarea id="character-personality" maxlength="4000"></textarea></label>
-          <label><span data-i18n="preferences">偏好</span><textarea id="character-preferences" maxlength="4000"></textarea></label>
-          <label><span data-i18n="facts">重要事实</span><textarea id="character-facts" maxlength="4000"></textarea></label>
-          <label class="full"><span data-i18n="notes">管理员备注</span><textarea id="character-notes" maxlength="4000"></textarea></label>
+          <label><span>姓名</span><input id="character-name" maxlength="100" required /></label>
+          <label><span>昵称</span><input id="character-aliases" maxlength="1000" /></label>
+          <label class="full"><span>身份简介</span><textarea id="character-bio" maxlength="4000"></textarea></label>
+          <label class="full"><span>性格</span><textarea id="character-personality" maxlength="4000"></textarea></label>
+          <label><span>偏好</span><textarea id="character-preferences" maxlength="4000"></textarea></label>
+          <label><span>重要事实</span><textarea id="character-facts" maxlength="4000"></textarea></label>
+          <label class="full"><span>管理员备注</span><textarea id="character-notes" maxlength="4000"></textarea></label>
         </div>
         <div class="dialog-actions">
-          <button class="secondary-button close-dialog" type="button" data-i18n="cancel">取消</button>
-          <button class="primary-button" type="submit" data-i18n="save">保存</button>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">保存</button>
         </div>
       </form>
     </dialog>
@@ -109,24 +109,24 @@
     <dialog id="relationship-dialog">
       <form id="relationship-form" method="dialog">
         <div class="dialog-title-row">
-          <h2 class="dialog-title" data-i18n="relationDetails">关系信息</h2>
-          <button class="icon-button close-dialog" type="button" aria-label="Close">×</button>
+          <h2 class="dialog-title">关系信息</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
         </div>
         <input id="relationship-id" type="hidden" />
         <div class="form-grid">
-          <label><span data-i18n="source">起点人物</span><select id="relationship-source" required></select></label>
-          <label><span data-i18n="target">终点人物</span><select id="relationship-target" required></select></label>
-          <label><span data-i18n="type">关系类型</span><input id="relationship-type" maxlength="100" required /></label>
-          <label><span data-i18n="status">状态</span><select id="relationship-status"><option value="active" data-i18n="statusActive">进行中</option><option value="uncertain" data-i18n="statusUncertain">不确定</option><option value="ended" data-i18n="statusEnded">已结束</option></select></label>
-          <label class="full"><span data-i18n="strength">关系强度</span><div class="range-row"><input id="relationship-strength" type="range" min="-100" max="100" value="0" /><output id="strength-output">0</output></div></label>
-          <label class="full"><span data-i18n="description">关系描述</span><textarea id="relationship-description" maxlength="2000"></textarea></label>
-          <label class="full"><span data-i18n="evidence">新增证据摘录</span><textarea id="relationship-evidence" maxlength="300"></textarea></label>
+          <label><span>起点人物</span><select id="relationship-source" required></select></label>
+          <label><span>终点人物</span><select id="relationship-target" required></select></label>
+          <label><span>关系类型</span><input id="relationship-type" maxlength="100" required /></label>
+          <label><span>状态</span><select id="relationship-status"><option value="active">进行中</option><option value="uncertain">不确定</option><option value="ended">已结束</option></select></label>
+          <label class="full"><span>关系强度</span><div class="range-row"><input id="relationship-strength" type="range" min="-100" max="100" value="0" /><output id="strength-output">0</output></div></label>
+          <label class="full"><span>关系描述</span><textarea id="relationship-description" maxlength="2000"></textarea></label>
+          <label class="full"><span>新增证据摘录</span><textarea id="relationship-evidence" maxlength="300"></textarea></label>
         </div>
         <div class="dialog-actions">
-          <button id="delete-relationship-button" class="danger-button hidden" type="button" data-i18n="delete">删除</button>
+          <button id="delete-relationship-button" class="danger-button hidden" type="button">删除</button>
           <span class="dialog-spacer"></span>
-          <button class="secondary-button close-dialog" type="button" data-i18n="cancel">取消</button>
-          <button class="primary-button" type="submit" data-i18n="save">保存</button>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">保存</button>
         </div>
       </form>
     </dialog>
@@ -134,16 +134,16 @@
     <dialog id="merge-dialog">
       <form id="merge-form" method="dialog">
         <div class="dialog-title-row">
-          <h2 class="dialog-title" data-i18n="merge">合并人物</h2>
-          <button class="icon-button close-dialog" type="button" aria-label="Close">×</button>
+          <h2 class="dialog-title">合并人物</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
         </div>
         <div class="form-grid">
-          <label><span data-i18n="keepPerson">保留人物</span><select id="merge-target" required></select></label>
-          <label><span data-i18n="duplicatePerson">重复人物</span><select id="merge-duplicate" required></select></label>
+          <label><span>保留人物</span><select id="merge-target" required></select></label>
+          <label><span>重复人物</span><select id="merge-duplicate" required></select></label>
         </div>
         <div class="dialog-actions">
-          <button class="secondary-button close-dialog" type="button" data-i18n="cancel">取消</button>
-          <button class="primary-button" type="submit" data-i18n="merge">合并人物</button>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">合并人物</button>
         </div>
       </form>
     </dialog>

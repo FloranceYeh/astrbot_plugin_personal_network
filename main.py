@@ -25,98 +25,12 @@ from astrbot.api.web import (
     request,
 )
 from astrbot.core.agent.message import TextPart
-from astrbot.core.agent.tool import FunctionTool
 
 from .storage import VALID_RELATIONSHIP_STATUSES, NetworkStorage
 
 PLUGIN_NAME = "astrbot_plugin_personal_network"
 MAX_AVATAR_BYTES = 2 * 1024 * 1024
 MAX_IMPORT_BYTES = 25 * 1024 * 1024
-
-TOOL_PARAMETERS: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "characters": {
-            "type": "array",
-            "description": "Characters to create or update. Use ref to reference a new character in relationships.",
-            "maxItems": 20,
-            "items": {
-                "type": "object",
-                "properties": {
-                    "ref": {
-                        "type": "string",
-                        "description": "Request-local identifier for a new or matched character.",
-                    },
-                    "id": {
-                        "type": "string",
-                        "description": "Existing character UUID when known.",
-                    },
-                    "name": {"type": "string"},
-                    "aliases": {"type": "array", "items": {"type": "string"}},
-                    "bio": {"type": "string"},
-                    "personality": {"type": "string"},
-                    "preferences": {"type": "array", "items": {"type": "string"}},
-                    "facts": {"type": "array", "items": {"type": "string"}},
-                    "current_sender": {
-                        "type": "boolean",
-                        "description": "Bind this character to the trusted current sender and current group nickname.",
-                    },
-                },
-                "required": ["ref", "name"],
-            },
-        },
-        "relationships": {
-            "type": "array",
-            "description": "Directed relationships. Use persona for the current persona root.",
-            "maxItems": 30,
-            "items": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "description": "Existing relationship UUID when known.",
-                    },
-                    "source": {
-                        "type": "string",
-                        "description": "Character UUID, local ref, or persona.",
-                    },
-                    "target": {
-                        "type": "string",
-                        "description": "Character UUID, local ref, or persona.",
-                    },
-                    "type": {
-                        "type": "string",
-                        "description": "Free-form relationship label.",
-                    },
-                    "strength": {"type": "integer", "minimum": -100, "maximum": 100},
-                    "status": {
-                        "type": "string",
-                        "enum": ["active", "ended", "uncertain"],
-                    },
-                    "description": {"type": "string"},
-                    "evidence": {
-                        "type": "string",
-                        "description": "At most 300 characters quoted or closely excerpted from the current message.",
-                    },
-                },
-                "required": [
-                    "source",
-                    "target",
-                    "type",
-                    "strength",
-                    "status",
-                    "description",
-                    "evidence",
-                ],
-            },
-        },
-    },
-    "required": ["characters", "relationships"],
-}
-
-
-class PersonalNetworkTool(FunctionTool):
-    """Plugin-owned function tool so AstrBot can unload it correctly."""
 
 
 class PersonalNetworkPlugin(Star):
@@ -138,19 +52,6 @@ class PersonalNetworkPlugin(Star):
         self.export_dir.mkdir(parents=True, exist_ok=True)
         self.storage = NetworkStorage(self.data_dir / "personal_network.sqlite3")
         self._import_previews: dict[str, tuple[str, dict[str, Any]]] = {}
-        self.context.add_llm_tools(
-            PersonalNetworkTool(
-                name="update_personal_network",
-                description=(
-                    "Record explicit, durable facts about people and directed relationships for the current persona. "
-                    "Call only when the conversation clearly establishes new or corrected information. "
-                    "Do not record guesses, jokes, role-play-only claims, transient moods, or sensitive facts that were not explicitly stated."
-                ),
-                parameters=TOOL_PARAMETERS,
-                # StarManager binds the plugin instance after discovering the tool.
-                handler=type(self).update_personal_network,
-            )
-        )
         routes = [
             ("personas", self.api_personas, ["GET"]),
             ("network", self.api_network, ["GET"]),
@@ -279,18 +180,31 @@ class PersonalNetworkPlugin(Star):
                 TextPart(text=context_text).mark_as_temp()
             )
 
+    @filter.llm_tool(name="update_personal_network")
     async def update_personal_network(
         self,
         event: AstrMessageEvent,
         characters: list[dict[str, Any]],
         relationships: list[dict[str, Any]],
     ) -> str:
-        """Apply one trusted LLM batch to the current persona network.
+        """Record explicit, durable people and relationships for the current persona.
+
+        Use this tool only for facts clearly established by the conversation. Do not
+        record guesses, jokes, role-play-only claims, transient moods, or unstated
+        sensitive information.
 
         Args:
-            event: Current AstrBot message event supplied by the framework.
-            characters: Character upserts from the tool call.
-            relationships: Directed relationship upserts from the tool call.
+            characters (list[dict]): Character upserts, at most 20. Each object needs
+                `ref` and `name`; optional keys are `id`, `aliases`, `bio`,
+                `personality`, `preferences`, `facts`, and `current_sender`. Use
+                `current_sender` only to bind the trusted current message sender.
+            relationships (list[dict]): Directed relationship upserts, at most 30.
+                Each object needs `source`, `target`, `type`, `strength`, `status`,
+                `description`, and `evidence`; `id` is optional. Source and target
+                accept a character UUID, a request-local character ref, or `persona`.
+                Strength ranges from -100 to 100, status is active, ended, or
+                uncertain, and evidence must quote the current message within 300
+                characters.
 
         Returns:
             JSON summary of resolved references and updated relationships.

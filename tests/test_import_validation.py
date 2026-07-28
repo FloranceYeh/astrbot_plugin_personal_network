@@ -6,16 +6,13 @@ import base64
 import functools
 import io
 import uuid
-from types import SimpleNamespace
 
 import pytest
-from jsonschema import Draft202012Validator
 from PIL import Image
+from astrbot.core.provider.register import llm_tools
 
 from data.plugins.astrbot_plugin_personal_network.main import (
-    TOOL_PARAMETERS,
     PersonalNetworkPlugin,
-    PersonalNetworkTool,
 )
 
 
@@ -49,43 +46,28 @@ def valid_payload() -> dict:
     }
 
 
-def test_tool_schema_is_valid_and_plugin_owned():
-    Draft202012Validator.check_schema(TOOL_PARAMETERS)
-    tool = PersonalNetworkTool(
-        name="update_personal_network",
-        description="test",
-        parameters=TOOL_PARAMETERS,
-    )
+def test_tool_is_registered_by_decorator():
+    tool = llm_tools.get_func("update_personal_network")
 
-    assert tool.__module__.endswith("astrbot_plugin_personal_network.main")
-    assert set(TOOL_PARAMETERS["properties"]) == {"characters", "relationships"}
+    assert tool is not None
+    assert tool.handler is PersonalNetworkPlugin.update_personal_network
+    assert set(tool.parameters["properties"]) == {"characters", "relationships"}
+    assert tool.parameters["properties"]["characters"]["type"] == "array"
+    assert tool.parameters["properties"]["characters"]["items"] == {
+        "type": "object"
+    }
 
 
 @pytest.mark.asyncio
-async def test_tool_handler_accepts_framework_instance_binding(
-    monkeypatch, tmp_path
-):
-    registered_tools = []
-    context = SimpleNamespace(
-        add_llm_tools=lambda *tools: registered_tools.extend(tools),
-        register_web_api=lambda *args: None,
-    )
-    monkeypatch.setattr(
-        "data.plugins.astrbot_plugin_personal_network.main.StarTools.get_data_dir",
-        classmethod(lambda cls: tmp_path),
-    )
-    plugin = PersonalNetworkPlugin(context, {"enabled": False})
+async def test_decorated_tool_accepts_framework_instance_binding():
+    tool = llm_tools.get_func("update_personal_network")
+    plugin = PersonalNetworkPlugin.__new__(PersonalNetworkPlugin)
+    plugin.config = {"enabled": False}
 
-    try:
-        tool = registered_tools[0]
-        assert tool.handler is PersonalNetworkPlugin.update_personal_network
+    handler = functools.partial(tool.handler, plugin)
+    result = await handler(object(), [], [])
 
-        handler = functools.partial(tool.handler, plugin)
-        result = await handler(object(), [], [])
-
-        assert result == '{"updated": false, "reason": "plugin disabled"}'
-    finally:
-        plugin.storage.close()
+    assert result == '{"updated": false, "reason": "plugin disabled"}'
 
 
 def test_import_rejects_unknown_relationship_character():

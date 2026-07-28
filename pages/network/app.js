@@ -1,47 +1,19 @@
 const bridge = window.AstrBotPluginPage;
 
-const fallbackText = {
-  zh: {
-    heading: "人物关系网络", persona: "人格", enabled: "启用", graph: "关系网络", people: "人物卡片",
-    search: "搜索人物或关系", searchPeople: "搜索人物", allStatuses: "全部状态", statusActive: "进行中",
-    statusUncertain: "不确定", statusEnded: "已结束", fit: "适应画布", addRelation: "添加关系",
-    nothingSelected: "未选择项目", merge: "合并人物", addPerson: "添加人物", personDetails: "人物信息",
-    name: "姓名", aliases: "昵称", bio: "身份简介", personality: "性格", preferences: "偏好", facts: "重要事实",
-    notes: "管理员备注", cancel: "取消", save: "保存", relationDetails: "关系信息", source: "起点人物",
-    target: "终点人物", type: "关系类型", status: "状态", strength: "关系强度", description: "关系描述",
-    evidence: "新增证据摘录", delete: "删除", keepPerson: "保留人物", duplicatePerson: "重复人物",
-    edit: "编辑", uploadAvatar: "上传头像", relationships: "相关关系", evidenceHistory: "证据记录", identities: "平台身份", nicknames: "常用昵称",
-    noDetails: "暂无详细资料", noPeople: "当前人格还没有人物", root: "人格", missing: "人格已缺失",
-    relationCount: "条关系", personCount: "个人物", saved: "已保存", deleted: "已删除", merged: "人物已合并",
-    imported: "导入完成", exported: "导出已开始", confirmDeletePerson: "删除该人物及其全部关系？",
-    confirmDeleteRelation: "删除该关系及其证据？", confirmMerge: "重复人物会被删除，关系和身份将迁移到保留人物。继续？",
-    invalidMerge: "请选择两个不同的人物", selectJson: "请选择 JSON 导出文件", previewImport: "导入预检",
-    confirmImport: "确认合并导入？不会删除本地数据。", loadFailed: "加载失败", actionFailed: "操作失败",
-  },
-  en: {
-    heading: "Personal Network", persona: "Persona", enabled: "Enabled", graph: "Network", people: "People",
-    search: "Search people or relationships", searchPeople: "Search people", allStatuses: "All statuses",
-    statusActive: "Active", statusUncertain: "Uncertain", statusEnded: "Ended", fit: "Fit view",
-    addRelation: "Add relation", nothingSelected: "Nothing selected", merge: "Merge people", addPerson: "Add person",
-    personDetails: "Person details", name: "Name", aliases: "Aliases", bio: "Identity summary", personality: "Personality",
-    preferences: "Preferences", facts: "Important facts", notes: "Administrator notes", cancel: "Cancel", save: "Save",
-    relationDetails: "Relationship", source: "Source", target: "Target", type: "Relationship type", status: "Status",
-    strength: "Strength", description: "Description", evidence: "New evidence excerpt", delete: "Delete",
-    keepPerson: "Keep person", duplicatePerson: "Duplicate person", edit: "Edit", uploadAvatar: "Upload avatar",
-    relationships: "Relationships", evidenceHistory: "Evidence", identities: "Platform identities", nicknames: "Frequent nicknames", noDetails: "No details available",
-    noPeople: "No people in this persona network yet", root: "Persona", missing: "Missing persona",
-    relationCount: "relations", personCount: "people", saved: "Saved", deleted: "Deleted", merged: "People merged",
-    imported: "Import complete", exported: "Export started", confirmDeletePerson: "Delete this person and all relationships?",
-    confirmDeleteRelation: "Delete this relationship and its evidence?",
-    confirmMerge: "The duplicate will be deleted and its relationships and identities moved. Continue?",
-    invalidMerge: "Choose two different people", selectJson: "Choose a JSON export", previewImport: "Import preview",
-    confirmImport: "Merge this import? Local-only records will not be deleted.", loadFailed: "Failed to load",
-    actionFailed: "Action failed",
-  },
+const uiText = {
+  nothingSelected: "未选择项目", statusActive: "进行中", statusUncertain: "不确定", statusEnded: "已结束",
+  edit: "编辑", delete: "删除", strength: "关系强度", description: "关系描述", evidenceHistory: "证据记录",
+  noDetails: "暂无详细资料", root: "人格", bio: "身份简介", personality: "性格", preferences: "偏好",
+  facts: "重要事实", identities: "平台身份", nicknames: "常用昵称", relationships: "相关关系", notes: "管理员备注",
+  uploadAvatar: "上传头像", noPeople: "当前人格还没有人物", missing: "人格已缺失", relationCount: "条关系",
+  personCount: "个人物", saved: "已保存", deleted: "已删除", merged: "人物已合并", imported: "导入完成",
+  exported: "导出已开始", confirmDeletePerson: "删除该人物及其全部关系？", confirmDeleteRelation: "删除该关系及其证据？",
+  confirmMerge: "重复人物会被删除，关系和身份将迁移到保留人物。继续？", invalidMerge: "请选择两个不同的人物",
+  previewImport: "导入预检", confirmImport: "确认合并导入？不会删除本地数据。", loadFailed: "加载失败",
+  actionFailed: "操作失败",
 };
 
 const state = {
-  locale: "zh-CN",
   personas: [],
   persona: null,
   network: { network: {}, characters: [], identities: [], relationships: [], evidence: [] },
@@ -51,18 +23,10 @@ const state = {
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const lang = () => (state.locale.toLowerCase().startsWith("zh") ? "zh" : "en");
-const t = (key) => fallbackText[lang()][key] || key;
+const t = (key) => uiText[key] || key;
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
 const splitList = (value) => value.split(/[，,\n]/).map((item) => item.trim()).filter(Boolean);
 const byId = (id) => state.network.characters.find((item) => item.id === id);
-
-function applyTranslations() {
-  document.documentElement.lang = state.locale;
-  document.title = bridge.t("pages.network.title", t("heading"));
-  $$('[data-i18n]').forEach((element) => { element.textContent = t(element.dataset.i18n); });
-  $$('[data-i18n-placeholder]').forEach((element) => { element.placeholder = t(element.dataset.i18nPlaceholder); });
-}
 
 function toast(message, error = false) {
   const item = document.createElement("div");
@@ -207,7 +171,7 @@ function renderInspector() {
       <div class="inspector-actions"><button class="primary-button" id="inspect-edit-relation">${esc(t("edit"))}</button><button class="danger-button" id="inspect-delete-relation">${esc(t("delete"))}</button></div>
       <div class="detail-section"><h3>${esc(t("strength"))}</h3><p>${relation.strength}</p></div>
       <div class="detail-section"><h3>${esc(t("description"))}</h3><p>${esc(relation.description || t("noDetails"))}</p></div>
-      <div class="detail-section"><h3>${esc(t("evidenceHistory"))}</h3>${evidence.length ? evidence.map((item) => `<div class="evidence-row">${esc(item.excerpt)}<div class="relation-meta">${esc(new Date(item.created_at).toLocaleString(state.locale))}</div></div>`).join("") : `<p>${esc(t("noDetails"))}</p>`}</div>`;
+      <div class="detail-section"><h3>${esc(t("evidenceHistory"))}</h3>${evidence.length ? evidence.map((item) => `<div class="evidence-row">${esc(item.excerpt)}<div class="relation-meta">${esc(new Date(item.created_at).toLocaleString("zh-CN"))}</div></div>`).join("") : `<p>${esc(t("noDetails"))}</p>`}</div>`;
     $("#inspect-edit-relation").onclick = () => openRelationshipDialog(relation);
     $("#inspect-delete-relation").onclick = () => deleteRelationship(relation.id);
     return;
@@ -402,13 +366,9 @@ function bindEvents() {
 }
 
 async function start() {
-  const context = await bridge.ready();
-  state.locale = context.locale || "zh-CN";
-  applyTranslations();
+  await bridge.ready();
   bindEvents();
-  bridge.onContext((next) => {
-    state.locale = next.locale || state.locale;
-    applyTranslations();
+  bridge.onContext(() => {
     renderSummary(); renderPeople(); renderInspector(); renderGraph();
   });
   try { await loadPersonas(false); await loadNetwork(); }
