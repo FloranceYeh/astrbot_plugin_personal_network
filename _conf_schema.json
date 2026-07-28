@@ -1,0 +1,26 @@
+{
+  "enabled": {
+    "description": "启用关系网络",
+    "type": "bool",
+    "hint": "启用 LLM 更新工具和每轮相关人物上下文注入。",
+    "default": true
+  },
+  "context_max_characters": {
+    "description": "单次注入人物上限",
+    "type": "int",
+    "hint": "建议范围 1-20，默认最多注入 8 个人物。",
+    "default": 8
+  },
+  "context_max_relationships": {
+    "description": "单次注入关系上限",
+    "type": "int",
+    "hint": "建议范围 1-50，默认最多注入 16 条关系。",
+    "default": 16
+  },
+  "context_max_chars": {
+    "description": "单次注入字符上限",
+    "type": "int",
+    "hint": "建议范围 500-12000，默认 6000 字符。",
+    "default": 6000
+  }
+}

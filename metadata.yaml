@@ -1,0 +1,7 @@
+name: astrbot_plugin_personal_network
+display_name: 人际网络
+desc: Manage a persona-scoped relationship network with LLM updates and an embedded WebUI.
+version: 0.1.0
+author: Florance
+repo: ""
+astrbot_version: ">=4.26.0"
