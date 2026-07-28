@@ -168,10 +168,26 @@ class PersonalNetworkPlugin(Star):
         )
         text = str(req.prompt or event.message_str or "")
         await asyncio.to_thread(self.storage.record_alias_mentions, persona_id, text)
+        match_texts = [text]
+        for message in req.contexts[-6:]:
+            if not isinstance(message, dict) or message.get("role") not in {
+                "user",
+                "assistant",
+            }:
+                continue
+            content = message.get("content", "")
+            if isinstance(content, str):
+                match_texts.append(content)
+            elif isinstance(content, list):
+                match_texts.extend(
+                    str(part.get("text", ""))
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                )
         context_text = await asyncio.to_thread(
             self.storage.build_context,
             persona_id,
-            text,
+            "\n".join(match_texts),
             platform=platform,
             user_id=user_id,
             max_characters=self._config_int("context_max_characters", 8, 1, 20),
@@ -179,13 +195,21 @@ class PersonalNetworkPlugin(Star):
             max_chars=self._config_int("context_max_chars", 6000, 500, 12000),
         )
         if context_text:
-            req.extra_user_content_parts.append(
-                TextPart(text=context_text).mark_as_temp()
+            injection_position = str(
+                self.config.get("context_injection_position", "system_prompt")
             )
+            if injection_position == "user_content":
+                req.extra_user_content_parts.append(
+                    TextPart(text=context_text).mark_as_temp()
+                )
+            else:
+                injection_position = "system_prompt"
+                req.system_prompt += f"\n\n{context_text}"
             logger.info(
-                "[PersonalNetwork] Injected relationship context: persona=%s umo=%s chars=%s",
+                "[PersonalNetwork] Injected relationship context: persona=%s umo=%s position=%s chars=%s",
                 persona_id,
                 event.unified_msg_origin,
+                injection_position,
                 len(context_text),
             )
 
@@ -211,6 +235,8 @@ class PersonalNetworkPlugin(Star):
                 Each object needs `source`, `target`, `type`, `strength`, `status`,
                 `description`, and `evidence`; `id` is optional. Source and target
                 accept a character UUID, a request-local character ref, or `persona`.
+                The type states who the target is to the source, such as father,
+                friend, or crush; use a role noun rather than an action.
                 Strength ranges from -100 to 100, status is active, ended, or
                 uncertain, and evidence must quote the current message within 300
                 characters.

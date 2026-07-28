@@ -120,9 +120,9 @@
         </div>
         <input id="relationship-id" type="hidden" />
         <div class="form-grid">
-          <label><span>起点人物</span><select id="relationship-source" required></select></label>
-          <label><span>终点人物</span><select id="relationship-target" required></select></label>
-          <label><span>关系类型</span><input id="relationship-type" maxlength="100" required /></label>
+          <label><span>关系主体（谁的）</span><select id="relationship-source" required></select></label>
+          <label><span>关联人物（是谁）</span><select id="relationship-target" required></select></label>
+          <label><span>关联人物的身份</span><input id="relationship-type" maxlength="100" required /></label>
           <label><span>状态</span><select id="relationship-status"><option value="active">进行中</option><option value="uncertain">不确定</option><option value="ended">已结束</option></select></label>
           <label class="full"><span>关系强度</span><div class="range-row"><input id="relationship-strength" type="range" min="-100" max="100" value="0" /><output id="strength-output">0</output></div></label>
           <label class="full"><span>关系描述</span><textarea id="relationship-description" maxlength="2000"></textarea></label>

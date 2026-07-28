@@ -211,7 +211,7 @@ def test_relationship_query_supports_aliases_and_overview(storage: NetworkStorag
     assert "1 个人物、1 条关系" in overview
     assert "Lin" in overview
     assert "Xiao Lin（使用 1 次）" in details
-    assert "alice -> Lin：朋友" in details
+    assert "Lin 是 alice 的朋友" in details
     assert "多年好友" in details
 
 
@@ -330,7 +330,8 @@ def test_context_matches_alias_and_includes_one_hop(storage: NetworkStorage):
         max_chars=6000,
     )
     assert "Likes tea" in context
-    assert "RELATION alice -> Lin: friend" in context
+    assert "关系方向固定为：目标人物是主体人物的“关系类型”" in context
+    assert "关系事实：Lin 是 alice 的“friend”" in context
     assert storage.build_context(
         "alice",
         "Nobody relevant",

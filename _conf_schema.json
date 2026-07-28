@@ -5,6 +5,20 @@
     "hint": "启用 LLM 更新工具和每轮相关人物上下文注入。",
     "default": true
   },
+  "context_injection_position": {
+    "description": "关系注入位置",
+    "type": "string",
+    "hint": "系统提示词优先级更高；用户消息附加内容会作为本轮临时内容块发送。",
+    "options": [
+      "system_prompt",
+      "user_content"
+    ],
+    "labels": [
+      "系统提示词",
+      "用户消息附加内容"
+    ],
+    "default": "system_prompt"
+  },
   "context_max_characters": {
     "description": "单次注入人物上限",
     "type": "int",
