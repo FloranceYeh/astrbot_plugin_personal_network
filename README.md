@@ -28,7 +28,7 @@ Personal Network 是一个按 AstrBot 人格隔离数据的虚拟人生关系网
 
 所有现有人格默认启用关系网络，也可以在 Page 顶部逐个人格关闭。关闭后，该人格不再写入数据或注入关系上下文。
 
-LLM 工具可以分别新增或更新人物、关系和人生经历，`relationships` 不再是必填参数。它不能删除、合并人物或修改管理员备注；删除、合并、头像上传和管理员备注仅允许通过 WebUI 操作。
+LLM 工具可以分别新增或更新人物、关系和人生经历，`characters`、`relationships` 和 `interactions` 均为可选批次。它不能删除、合并人物或修改管理员备注；删除、合并、头像上传和管理员备注仅允许通过 WebUI 操作。
 
 ## 人物卡字段
 
@@ -75,7 +75,17 @@ SQLite 数据库、头像和临时导出文件存放在 AstrBot 插件数据目�
 
 自动对话经历不保存聊天正文，只保存参与人物、会话时间和固定摘要。LLM 或 WebUI 创建的人生经历保存管理员确认的结构化摘要，不保存完整聊天记录。
 
-数据库启动时会将当前 schema 3 数据迁移到 schema 4：旧关系证据转换为双方共同经历，负数关系强度归零。更老 schema 不提供兼容。
+## 与 Virtual Life 联动
+
+推荐配合 [astrbot_plugin_virtual_life](https://github.com/FloranceYeh/astrbot_plugin_virtual_life) 使用。Personal Network 负责维护人格生命中的人物、长期关系和共同经历，Virtual Life 负责生成日程、主动消息和随时间实际发生的虚拟生活；组合后，日程模型可以参考既有人际关系安排社交活动，已经结束且带有明确参与人物的日程也可以回写为人生经历。
+
+本插件通过 AstrBot 已加载插件实例公开以下异步接口，不需要其他插件访问 SQLite 或调用 WebUI HTTP API：
+
+- `get_network_for_plugin(persona_id)`：取得结构化关系网快照。
+- `get_context_for_plugin(persona_id, max_chars=4000)`：取得带稳定人物 ID 的模型上下文。
+- `record_life_event_from_plugin(...)`：以调用插件的稳定 `source_key` 幂等记录人生经历。
+
+Virtual Life 侧的联动配置默认关闭；未安装本插件时不会产生启动依赖。开启后，Virtual Life 只会回写已经结束且包含 `participant_ids` 的日程项，不会把尚未发生的未来计划提前写入人生经历。
 
 ## 开发
 

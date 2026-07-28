@@ -467,6 +467,50 @@ def test_delete_character_cascades_relationships_identities_and_life_events(
     assert data["life_events"] == []
 
 
+def test_external_life_event_is_idempotent_and_includes_persona(
+    storage: NetworkStorage,
+):
+    created = storage.upsert_batch(
+        "alice",
+        [{"ref": "lin", "name": "Lin"}],
+        [],
+    )
+
+    first = storage.record_external_life_event(
+        "alice",
+        [created["refs"]["lin"]],
+        event_type="virtual_schedule",
+        summary="Had lunch together",
+        occurred_at="2026-07-28T12:00:00+08:00",
+        importance=45,
+        emotional_tone="relaxed",
+        source="astrbot_plugin_virtual_life",
+        source_key="2026-07-28:lunch",
+    )
+    second = storage.record_external_life_event(
+        "alice",
+        [created["refs"]["lin"]],
+        event_type="virtual_schedule",
+        summary="Had lunch and talked about work",
+        occurred_at="2026-07-28T12:00:00+08:00",
+        importance=50,
+        emotional_tone="warm",
+        source="astrbot_plugin_virtual_life",
+        source_key="2026-07-28:lunch",
+    )
+
+    data = storage.get_network("alice")
+    assert first["event_id"] == second["event_id"]
+    assert first["created"] is True
+    assert second["created"] is False
+    assert len(data["life_events"]) == 1
+    assert data["life_events"][0]["summary"] == "Had lunch and talked about work"
+    assert set(data["life_events"][0]["participant_ids"]) == {
+        storage._root_id("alice"),
+        created["refs"]["lin"],
+    }
+
+
 def test_context_matches_alias_and_includes_one_hop(storage: NetworkStorage):
     storage.upsert_batch(
         "alice",

@@ -1131,6 +1131,126 @@ class NetworkStorage:
             if not cursor.rowcount:
                 raise ValueError("life event not found")
 
+    def record_external_life_event(
+        self,
+        persona_id: str,
+        participant_ids: list[str],
+        *,
+        event_type: str,
+        summary: str,
+        occurred_at: str,
+        importance: int,
+        emotional_tone: str,
+        source: str,
+        source_key: str,
+    ) -> dict[str, Any]:
+        """Upsert one idempotent life event from another plugin.
+
+        Args:
+            persona_id: Owning persona identifier.
+            participant_ids: Non-persona character UUIDs participating in the event.
+            event_type: Short event category.
+            summary: Durable event summary.
+            occurred_at: ISO 8601 event timestamp.
+            importance: Event importance from 0 to 100.
+            emotional_tone: Optional emotional tone.
+            source: Calling plugin identifier.
+            source_key: Stable caller-owned identifier used for deduplication.
+
+        Returns:
+            Event UUID and whether a new row was created.
+
+        Raises:
+            ValueError: If participants or event fields are invalid.
+        """
+        persona_id = str(persona_id or "").strip()
+        event_type = str(event_type or "").strip()[:100]
+        summary = str(summary or "").strip()[:2000]
+        emotional_tone = str(emotional_tone or "").strip()[:100]
+        source = str(source or "").strip()[:50]
+        source_key = str(source_key or "").strip()[:500]
+        if not persona_id or not event_type or not summary:
+            raise ValueError("persona, event type, and summary are required")
+        if not source or not source_key:
+            raise ValueError("source and source_key are required")
+        try:
+            importance = int(importance)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("event importance must be an integer") from exc
+        if importance < 0 or importance > 100:
+            raise ValueError("event importance must be between 0 and 100")
+        try:
+            occurred = datetime.fromisoformat(str(occurred_at).replace("Z", "+00:00"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("event occurred_at must be ISO 8601") from exc
+        if occurred.tzinfo is None:
+            occurred = occurred.replace(tzinfo=UTC)
+        occurred_value = occurred.astimezone(UTC).isoformat()
+        root_id = self.ensure_network(persona_id)
+        unique_ids = list(dict.fromkeys(str(item).strip() for item in participant_ids))
+        unique_ids = [item for item in unique_ids if item and item != root_id]
+        if not unique_ids:
+            raise ValueError(
+                "an external life event needs at least one other participant"
+            )
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                "SELECT id FROM characters WHERE persona_id = ? AND id IN ({})".format(
+                    ",".join("?" for _ in unique_ids)
+                ),
+                (persona_id, *unique_ids),
+            ).fetchall()
+            resolved_ids = {str(row["id"]) for row in rows}
+            if resolved_ids != set(unique_ids):
+                raise ValueError("external event contains an unknown character")
+            event_id = str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"astrbot-personal-network:{persona_id}:{source}:{source_key}",
+                )
+            )
+            existing = self._conn.execute(
+                "SELECT persona_id, created_at FROM life_events WHERE id = ?",
+                (event_id,),
+            ).fetchone()
+            if existing and str(existing["persona_id"]) != persona_id:
+                raise ValueError("external event UUID belongs to another persona")
+            now = self._now()
+            self._conn.execute(
+                """INSERT INTO life_events
+                   (id, persona_id, occurred_at, event_type, summary, importance,
+                    emotional_tone, source, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET occurred_at=excluded.occurred_at,
+                    event_type=excluded.event_type, summary=excluded.summary,
+                    importance=excluded.importance, emotional_tone=excluded.emotional_tone,
+                    source=excluded.source, updated_at=excluded.updated_at""",
+                (
+                    event_id,
+                    persona_id,
+                    occurred_value,
+                    event_type,
+                    summary,
+                    importance,
+                    emotional_tone,
+                    source,
+                    str(existing["created_at"]) if existing else now,
+                    now,
+                ),
+            )
+            self._conn.execute(
+                "DELETE FROM life_event_participants WHERE event_id = ?", (event_id,)
+            )
+            self._conn.executemany(
+                "INSERT INTO life_event_participants(event_id, character_id) VALUES (?, ?)",
+                [(event_id, root_id), *((event_id, item) for item in unique_ids)],
+            )
+            self._conn.execute(
+                "UPDATE networks SET updated_at = ? WHERE persona_id = ?",
+                (now, persona_id),
+            )
+        return {"event_id": event_id, "created": existing is None}
+
     def merge_characters(
         self, persona_id: str, target_id: str, duplicate_id: str
     ) -> str | None:
