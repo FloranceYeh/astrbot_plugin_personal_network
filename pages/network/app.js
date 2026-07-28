@@ -51,6 +51,28 @@ function toast(message, error = false) {
   window.setTimeout(() => item.remove(), 3500);
 }
 
+function confirmAction(message, confirmLabel = "确认") {
+  const dialog = $("#confirm-dialog");
+  const confirmButton = $("#confirm-submit");
+  $("#confirm-message").textContent = message;
+  confirmButton.textContent = confirmLabel;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (confirmed) => {
+      if (settled) return;
+      settled = true;
+      confirmButton.onclick = null;
+      dialog.removeEventListener("close", cancel);
+      if (dialog.open) dialog.close();
+      resolve(confirmed);
+    };
+    const cancel = () => finish(false);
+    confirmButton.onclick = () => finish(true);
+    dialog.addEventListener("close", cancel, { once: true });
+    dialog.showModal();
+  });
+}
+
 function avatarMarkup(character, size = "medium") {
   const initial = esc((character.name || "?").trim().slice(0, 1).toUpperCase());
   const image = character.avatar_data ? `<img src="${esc(character.avatar_data)}" alt="" />` : initial;
@@ -299,7 +321,7 @@ function openRelationshipDialog(relation = null) {
 }
 
 async function deleteCharacter(id) {
-  if (!window.confirm(t("confirmDeletePerson"))) return;
+  if (!await confirmAction(t("confirmDeletePerson"), "删除")) return;
   try {
     await bridge.apiPost("character/delete", { persona_id: state.persona.persona_id, character_id: id });
     $("#character-dialog").close(); state.selected = null; toast(t("deleted")); await loadNetwork();
@@ -307,7 +329,7 @@ async function deleteCharacter(id) {
 }
 
 async function deleteLifeEvent(id) {
-  if (!window.confirm(t("confirmDeleteEvent"))) return;
+  if (!await confirmAction(t("confirmDeleteEvent"), "删除")) return;
   try {
     await bridge.apiPost("life-event/delete", { persona_id: state.persona.persona_id, event_id: id });
     $("#life-event-dialog").close(); toast(t("deleted")); await loadNetwork();
@@ -315,7 +337,7 @@ async function deleteLifeEvent(id) {
 }
 
 async function deleteRelationship(id) {
-  if (!window.confirm(t("confirmDeleteRelation"))) return;
+  if (!await confirmAction(t("confirmDeleteRelation"), "删除")) return;
   try {
     await bridge.apiPost("relationship/delete", { persona_id: state.persona.persona_id, relationship_id: id });
     $("#relationship-dialog").close(); toast(t("deleted")); await loadNetwork();
@@ -420,7 +442,7 @@ function bindEvents() {
     const targetId = $("#merge-target").value;
     const duplicateId = $("#merge-duplicate").value;
     if (targetId === duplicateId) { toast(t("invalidMerge"), true); return; }
-    if (!window.confirm(t("confirmMerge"))) return;
+    if (!await confirmAction(t("confirmMerge"), "合并")) return;
     try {
       await bridge.apiPost("character/merge", { persona_id: state.persona.persona_id, target_id: targetId, duplicate_id: duplicateId });
       $("#merge-dialog").close(); toast(t("merged")); await loadNetwork();
@@ -442,7 +464,7 @@ function bindEvents() {
         return;
       }
       const details = `${t("previewImport")}\n${preview.new_characters} + ${preview.updated_characters} ↻ ${t("personCount")}\n${preview.new_relationships} + ${preview.updated_relationships} ↻ ${t("relationCount")}\n${preview.new_life_events} + ${preview.updated_life_events} ↻ 条经历\n\n${t("confirmImport")}`;
-      if (window.confirm(details)) {
+      if (await confirmAction(details, "导入")) {
         await bridge.apiPost("import/apply", { token: preview.token });
         toast(t("imported")); await loadNetwork();
       }

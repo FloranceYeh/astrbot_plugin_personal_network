@@ -139,6 +139,8 @@ dialog form { padding: 0 22px 20px; }
 .range-row output { width: 48px; text-align: center; color: var(--text); }
 .dialog-actions { gap: 8px; margin-top: 20px; justify-content: flex-end; }
 .dialog-spacer { flex: 1; }
+.confirm-dialog { width: min(440px, calc(100vw - 28px)); }
+.confirm-message { margin: 0; color: var(--text); font-size: 14px; line-height: 1.6; white-space: pre-line; }
 .hidden { display: none !important; }
 .toast-region { position: fixed; right: 18px; bottom: 18px; z-index: 100; display: grid; gap: 8px; }
 .toast { max-width: 360px; padding: 11px 14px; border-radius: 6px; background: var(--text); color: var(--surface); box-shadow: var(--shadow); font-size: 13px; }

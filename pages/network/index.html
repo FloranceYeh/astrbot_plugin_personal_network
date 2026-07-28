@@ -180,6 +180,20 @@
       </form>
     </dialog>
 
+    <dialog id="confirm-dialog" class="confirm-dialog">
+      <form method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">确认操作</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <p id="confirm-message" class="confirm-message"></p>
+        <div class="dialog-actions">
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button id="confirm-submit" class="danger-button" type="button">确认</button>
+        </div>
+      </form>
+    </dialog>
+
     <script src="./vendor/cytoscape.min.js"></script>
     <script type="module" src="./app.js"></script>
   </body>
