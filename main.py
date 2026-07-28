@@ -181,21 +181,22 @@ class PersonalNetworkPlugin(Star):
         text = str(req.prompt or event.message_str or "")
         await asyncio.to_thread(self.storage.record_alias_mentions, persona_id, text)
         match_texts = [text]
-        for message in req.contexts[-6:]:
-            if not isinstance(message, dict) or message.get("role") not in {
-                "user",
-                "assistant",
-            }:
-                continue
-            content = message.get("content", "")
-            if isinstance(content, str):
-                match_texts.append(content)
-            elif isinstance(content, list):
-                match_texts.extend(
-                    str(part.get("text", ""))
-                    for part in content
-                    if isinstance(part, dict) and part.get("type") == "text"
-                )
+        if not query_tool_enabled:
+            for message in req.contexts[-6:]:
+                if not isinstance(message, dict) or message.get("role") not in {
+                    "user",
+                    "assistant",
+                }:
+                    continue
+                content = message.get("content", "")
+                if isinstance(content, str):
+                    match_texts.append(content)
+                elif isinstance(content, list):
+                    match_texts.extend(
+                        str(part.get("text", ""))
+                        for part in content
+                        if isinstance(part, dict) and part.get("type") == "text"
+                    )
         context_text = await asyncio.to_thread(
             self.storage.build_context,
             persona_id,
