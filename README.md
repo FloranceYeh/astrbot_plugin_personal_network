@@ -1,4 +1,10 @@
-# 人际网络（Personal Network）
+<p align="center">
+  <img src="logo-large.png" alt="Personal Network Logo" width="180" />
+</p>
+
+<h1 align="center">人际网络（Personal Network）</h1>
+
+<p align="center">按人格管理虚拟的人际网络中的人物、关系与共同经历，并提供可视化 WebUI。</p>
 
 Personal Network 是一个按 AstrBot 人格隔离数据的虚拟人生关系网络插件。真实用户、群友和虚构人物都可以成为人格人生中的人物；LLM 与 WebUI 可以记录稳定人物资料、关系和共同经历，后续聊天会按姓名、别名或代词指向注入相关人生上下文。
 
