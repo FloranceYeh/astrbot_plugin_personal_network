@@ -182,6 +182,12 @@ class PersonalNetworkPlugin(Star):
             req.extra_user_content_parts.append(
                 TextPart(text=context_text).mark_as_temp()
             )
+            logger.info(
+                "[PersonalNetwork] Injected relationship context: persona=%s umo=%s chars=%s",
+                persona_id,
+                event.unified_msg_origin,
+                len(context_text),
+            )
 
     @filter.llm_tool(name="update_personal_network")
     async def update_personal_network(
