@@ -11,17 +11,31 @@
     "hint": "关闭后模型看不到 query_personal_network 工具，聊天命令 /关系查询 仍可使用。",
     "default": true
   },
+  "enable_recent_context_fallback": {
+    "description": "启用最近消息兜底",
+    "type": "bool",
+    "hint": "关闭 LLM 主动查询工具时，允许从最近会话消息匹配人物。",
+    "default": true
+  },
+  "recent_context_fallback_messages": {
+    "description": "最近消息兜底数量",
+    "type": "int",
+    "hint": "建议范围 1-50，默认匹配最近 6 条消息。仅在最近消息兜底生效时使用。",
+    "default": 6
+  },
   "context_injection_position": {
     "description": "关系注入位置",
     "type": "string",
-    "hint": "系统提示词优先级更高；用户消息附加内容会作为本轮临时内容块发送。",
+    "hint": "持久化伪历史消息会在当前会话中保留一条关系上下文，新数据会替换旧数据。",
     "options": [
       "system_prompt",
-      "user_content"
+      "user_content",
+      "history_message"
     ],
     "labels": [
       "系统提示词",
-      "用户消息附加内容"
+      "用户消息附加内容",
+      "持久化伪历史消息"
     ],
     "default": "system_prompt"
   },

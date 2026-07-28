@@ -145,6 +145,29 @@ class PersonalNetworkPlugin(Star):
         query_tool_enabled = bool(self.config.get("enable_llm_query_tool", True))
         if not query_tool_enabled and req.func_tool:
             req.func_tool.remove_tool("query_personal_network")
+        injection_position = str(
+            self.config.get("context_injection_position", "system_prompt")
+        )
+        if injection_position not in {
+            "system_prompt",
+            "user_content",
+            "history_message",
+        }:
+            injection_position = "system_prompt"
+        persisted_context = ""
+        contexts_without_network = []
+        for message in req.contexts:
+            content = message.get("content", "") if isinstance(message, dict) else ""
+            if (
+                isinstance(message, dict)
+                and message.get("role") == "system"
+                and isinstance(content, str)
+                and content.startswith("<personal_network_context>")
+            ):
+                persisted_context = content
+                continue
+            contexts_without_network.append(message)
+        req.contexts = contexts_without_network
         if not bool(self.config.get("enabled", True)):
             return
         persona_id = await self._resolve_persona_id(event.unified_msg_origin)
@@ -181,8 +204,13 @@ class PersonalNetworkPlugin(Star):
         text = str(req.prompt or event.message_str or "")
         await asyncio.to_thread(self.storage.record_alias_mentions, persona_id, text)
         match_texts = [text]
-        if not query_tool_enabled:
-            for message in req.contexts[-6:]:
+        if not query_tool_enabled and bool(
+            self.config.get("enable_recent_context_fallback", True)
+        ):
+            fallback_messages = self._config_int(
+                "recent_context_fallback_messages", 6, 1, 50
+            )
+            for message in req.contexts[-fallback_messages:]:
                 if not isinstance(message, dict) or message.get("role") not in {
                     "user",
                     "assistant",
@@ -208,13 +236,13 @@ class PersonalNetworkPlugin(Star):
             max_chars=self._config_int("context_max_chars", 6000, 500, 12000),
         )
         if context_text:
-            injection_position = str(
-                self.config.get("context_injection_position", "system_prompt")
-            )
             if injection_position == "user_content":
                 req.extra_user_content_parts.append(
                     TextPart(text=context_text).mark_as_temp()
                 )
+            elif injection_position == "history_message":
+                # AstrBot persists non-primary system messages from the run context.
+                req.contexts.append({"role": "system", "content": context_text})
             else:
                 injection_position = "system_prompt"
                 req.system_prompt += f"\n\n{context_text}"
@@ -224,6 +252,15 @@ class PersonalNetworkPlugin(Star):
                 event.unified_msg_origin,
                 injection_position,
                 len(context_text),
+            )
+        elif injection_position == "history_message" and persisted_context:
+            req.contexts.append({"role": "system", "content": persisted_context})
+            logger.info(
+                "[PersonalNetwork] Injected persisted relationship context: persona=%s umo=%s position=%s chars=%s",
+                persona_id,
+                event.unified_msg_origin,
+                injection_position,
+                len(persisted_context),
             )
 
     @filter.llm_tool(name="update_personal_network")
