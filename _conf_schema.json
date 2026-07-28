@@ -11,31 +11,38 @@
     "hint": "关闭后模型看不到 query_personal_network 工具，聊天命令 /关系查询 仍可使用。",
     "default": true
   },
-  "enable_recent_context_fallback": {
-    "description": "启用最近消息兜底",
-    "type": "bool",
-    "hint": "关闭 LLM 主动查询工具时，允许从最近会话消息匹配人物。",
-    "default": true
-  },
-  "recent_context_fallback_messages": {
-    "description": "最近消息兜底数量",
+  "pronoun_history_messages": {
+    "description": "代词回溯消息数量",
     "type": "int",
-    "hint": "建议范围 1-50，默认匹配最近 6 条消息。仅在最近消息兜底生效时使用。",
-    "default": 6
+    "hint": "当前消息命中代词时，从最近的用户或助手消息向上查找人物，建议范围 1-100。",
+    "default": 20
+  },
+  "pronoun_patterns": {
+    "description": "代词匹配规则",
+    "type": "list",
+    "hint": "正则表达式列表。当前消息命中任一规则且未出现人物名称时，向上查找最近一条包含人物名称或别名的消息。",
+    "default": [
+      "(?<![其吉维])他(?!们)",
+      "她(?!们)",
+      "他们",
+      "她们",
+      "对方",
+      "那个人",
+      "这个人",
+      "这位"
+    ]
   },
   "context_injection_position": {
     "description": "关系注入位置",
     "type": "string",
-    "hint": "持久化伪历史消息会在当前会话中保留一条关系上下文，新数据会替换旧数据。",
+    "hint": "关系上下文只对本次 LLM 请求生效，不写入会话历史。",
     "options": [
       "system_prompt",
-      "user_content",
-      "history_message"
+      "user_content"
     ],
     "labels": [
       "系统提示词",
-      "用户消息附加内容",
-      "持久化伪历史消息"
+      "用户消息附加内容"
     ],
     "default": "system_prompt"
   },

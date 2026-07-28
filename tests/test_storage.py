@@ -322,9 +322,7 @@ def test_context_matches_alias_and_includes_one_hop(storage: NetworkStorage):
 
     context = storage.build_context(
         "alice",
-        "How is Xiao Lin?",
-        platform="test",
-        user_id="none",
+        ["How is XIAO LIN?"],
         max_characters=8,
         max_relationships=16,
         max_chars=6000,
@@ -334,13 +332,58 @@ def test_context_matches_alias_and_includes_one_hop(storage: NetworkStorage):
     assert "关系事实：Lin 是 alice 的“friend”" in context
     assert storage.build_context(
         "alice",
-        "Nobody relevant",
-        platform="test",
-        user_id="none",
+        ["Nobody relevant"],
         max_characters=8,
         max_relationships=16,
         max_chars=6000,
     ) == ""
+
+
+def test_context_uses_first_candidate_text_with_a_character(storage: NetworkStorage):
+    storage.upsert_batch(
+        "alice",
+        [
+            {"ref": "lin", "name": "Lin"},
+            {"ref": "mei", "name": "Mei"},
+        ],
+        [],
+    )
+
+    context = storage.build_context(
+        "alice",
+        ["没有人物", "Mei and Lin", "Lin"],
+        max_characters=8,
+        max_relationships=16,
+        max_chars=6000,
+    )
+
+    assert "人物：Mei" in context
+    assert "人物：Lin" in context
+
+
+def test_bound_sender_identity_does_not_trigger_context(storage: NetworkStorage):
+    storage.upsert_batch(
+        "alice",
+        [{"ref": "lin", "name": "Lin", "current_sender": True}],
+        [],
+        sender={
+            "platform": "test",
+            "user_id": "user",
+            "session_id": "",
+            "nickname": "Lin",
+            "umo": "test:friend:user",
+        },
+    )
+
+    context = storage.build_context(
+        "alice",
+        ["今天过得怎么样？"],
+        max_characters=8,
+        max_relationships=16,
+        max_chars=6000,
+    )
+
+    assert context == ""
 
 
 def test_import_merges_without_deleting_local_data(storage: NetworkStorage):

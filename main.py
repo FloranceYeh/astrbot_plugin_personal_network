@@ -7,6 +7,7 @@ import base64
 import binascii
 import io
 import json
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -148,13 +149,8 @@ class PersonalNetworkPlugin(Star):
         injection_position = str(
             self.config.get("context_injection_position", "system_prompt")
         )
-        if injection_position not in {
-            "system_prompt",
-            "user_content",
-            "history_message",
-        }:
+        if injection_position not in {"system_prompt", "user_content"}:
             injection_position = "system_prompt"
-        persisted_context = ""
         contexts_without_network = []
         for message in req.contexts:
             content = message.get("content", "") if isinstance(message, dict) else ""
@@ -164,7 +160,6 @@ class PersonalNetworkPlugin(Star):
                 and isinstance(content, str)
                 and content.startswith("<personal_network_context>")
             ):
-                persisted_context = content
                 continue
             contexts_without_network.append(message)
         req.contexts = contexts_without_network
@@ -204,33 +199,59 @@ class PersonalNetworkPlugin(Star):
         text = str(req.prompt or event.message_str or "")
         await asyncio.to_thread(self.storage.record_alias_mentions, persona_id, text)
         match_texts = [text]
-        if not query_tool_enabled and bool(
-            self.config.get("enable_recent_context_fallback", True)
-        ):
-            fallback_messages = self._config_int(
-                "recent_context_fallback_messages", 6, 1, 50
-            )
-            for message in req.contexts[-fallback_messages:]:
+        pronoun_matched = False
+        pronoun_patterns = self.config.get(
+            "pronoun_patterns",
+            [
+                r"(?<![其吉维])他(?!们)",
+                r"她(?!们)",
+                "他们",
+                "她们",
+                "对方",
+                "那个人",
+                "这个人",
+                "这位",
+            ],
+        )
+        if isinstance(pronoun_patterns, list):
+            for pattern in pronoun_patterns:
+                try:
+                    if pattern and re.search(str(pattern), text, re.IGNORECASE):
+                        pronoun_matched = True
+                        break
+                except re.error as exc:
+                    logger.warning(
+                        "[PersonalNetwork] Ignored invalid pronoun pattern %r: %s",
+                        pattern,
+                        exc,
+                    )
+        if pronoun_matched:
+            history_messages = self._config_int("pronoun_history_messages", 20, 1, 100)
+            inspected = 0
+            for message in reversed(req.contexts):
+                if inspected >= history_messages:
+                    break
                 if not isinstance(message, dict) or message.get("role") not in {
                     "user",
                     "assistant",
                 }:
                     continue
+                inspected += 1
                 content = message.get("content", "")
-                if isinstance(content, str):
+                if isinstance(content, str) and content:
                     match_texts.append(content)
                 elif isinstance(content, list):
-                    match_texts.extend(
+                    message_text = "\n".join(
                         str(part.get("text", ""))
                         for part in content
                         if isinstance(part, dict) and part.get("type") == "text"
                     )
+                    if message_text:
+                        match_texts.append(message_text)
         context_text = await asyncio.to_thread(
             self.storage.build_context,
             persona_id,
-            "\n".join(match_texts),
-            platform=platform,
-            user_id=user_id,
+            match_texts,
             max_characters=self._config_int("context_max_characters", 8, 1, 20),
             max_relationships=self._config_int("context_max_relationships", 16, 1, 50),
             max_chars=self._config_int("context_max_chars", 6000, 500, 12000),
@@ -240,9 +261,6 @@ class PersonalNetworkPlugin(Star):
                 req.extra_user_content_parts.append(
                     TextPart(text=context_text).mark_as_temp()
                 )
-            elif injection_position == "history_message":
-                # AstrBot persists non-primary system messages from the run context.
-                req.contexts.append({"role": "system", "content": context_text})
             else:
                 injection_position = "system_prompt"
                 req.system_prompt += f"\n\n{context_text}"
@@ -252,15 +270,6 @@ class PersonalNetworkPlugin(Star):
                 event.unified_msg_origin,
                 injection_position,
                 len(context_text),
-            )
-        elif injection_position == "history_message" and persisted_context:
-            req.contexts.append({"role": "system", "content": persisted_context})
-            logger.info(
-                "[PersonalNetwork] Injected persisted relationship context: persona=%s umo=%s position=%s chars=%s",
-                persona_id,
-                event.unified_msg_origin,
-                injection_position,
-                len(persisted_context),
             )
 
     @filter.llm_tool(name="update_personal_network")

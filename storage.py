@@ -994,21 +994,17 @@ class NetworkStorage:
     def build_context(
         self,
         persona_id: str,
-        text: str,
+        candidate_texts: list[str],
         *,
-        platform: str,
-        user_id: str,
         max_characters: int,
         max_relationships: int,
         max_chars: int,
     ) -> str:
-        """Build bounded context for names, aliases, and the current sender.
+        """Build bounded context for the first text containing names or aliases.
 
         Args:
             persona_id: Target AstrBot persona identifier.
-            text: Current and recent conversation text used for matching.
-            platform: Current message platform.
-            user_id: Current sender identifier.
+            candidate_texts: Texts ordered from highest to lowest matching priority.
             max_characters: Maximum directly matched characters.
             max_relationships: Maximum one-hop relationships.
             max_chars: Maximum returned context length.
@@ -1019,24 +1015,20 @@ class NetworkStorage:
         if not self.is_enabled(persona_id):
             return ""
         data = self.get_network(persona_id)
-        folded = text.casefold()
-        identities = {
-            identity["character_id"]
-            for identity in data["identities"]
-            if identity["platform"] == platform and identity["user_id"] == user_id
-        }
         matches: list[dict[str, Any]] = []
-        for character in data["characters"]:
-            if character["is_persona"]:
-                continue
-            names = [
-                character["name"],
-                *[item["alias"] for item in character["alias_usages"]],
-            ]
-            if character["id"] in identities or any(
-                name and name.casefold() in folded for name in names
-            ):
-                matches.append(character)
+        for text in candidate_texts:
+            folded = text.casefold()
+            for character in data["characters"]:
+                if character["is_persona"]:
+                    continue
+                names = [
+                    character["name"],
+                    *[item["alias"] for item in character["alias_usages"]],
+                ]
+                if any(name and name.casefold() in folded for name in names):
+                    matches.append(character)
+            if matches:
+                break
         if not matches:
             return ""
         selected_ids = {item["id"] for item in matches[:max_characters]}
