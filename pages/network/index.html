@@ -92,7 +92,13 @@
         <input id="character-id" type="hidden" />
         <div class="form-grid">
           <label><span>姓名</span><input id="character-name" maxlength="100" required /></label>
-          <label><span>昵称</span><input id="character-aliases" maxlength="1000" /></label>
+          <div class="full alias-field">
+            <div class="field-heading">
+              <span>人物别名</span>
+              <button id="add-alias-button" class="secondary-button compact-button" type="button">添加别名</button>
+            </div>
+            <div id="character-aliases" class="alias-editor"></div>
+          </div>
           <label class="full"><span>身份简介</span><textarea id="character-bio" maxlength="4000"></textarea></label>
           <label class="full"><span>性格</span><textarea id="character-personality" maxlength="4000"></textarea></label>
           <label><span>偏好</span><textarea id="character-preferences" maxlength="4000"></textarea></label>

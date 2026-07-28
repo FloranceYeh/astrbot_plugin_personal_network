@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import uuid
 from pathlib import Path
 
@@ -124,48 +123,96 @@ def test_nicknames_are_lists_sorted_by_usage_frequency(storage: NetworkStorage):
     )
 
 
-def test_version_one_nickname_is_migrated_to_frequency_list(tmp_path: Path):
-    database_path = tmp_path / "legacy.sqlite3"
-    connection = sqlite3.connect(database_path)
-    connection.executescript(
-        """
-        CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        INSERT INTO schema_meta(key, value) VALUES ('version', '1');
-        CREATE TABLE external_identities (
-            id TEXT PRIMARY KEY,
-            persona_id TEXT NOT NULL,
-            character_id TEXT NOT NULL,
-            platform TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            session_id TEXT NOT NULL DEFAULT '',
-            nickname TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(persona_id, platform, user_id, session_id)
-        );
-        """
-    )
-    connection.execute(
-        """INSERT INTO external_identities VALUES
-           ('identity-1', 'alice', 'person-1', 'test', 'user-1', 'group-1',
-            'Legacy Nick', '2026-01-01T00:00:00+00:00', '2026-01-02T00:00:00+00:00')"""
-    )
-    connection.commit()
-    connection.close()
-
-    migrated = NetworkStorage(database_path)
-    try:
-        identity = migrated.get_network("alice")["identities"][0]
-        assert identity["nicknames"] == [
+def test_character_aliases_are_editable_and_sorted_by_frequency(
+    storage: NetworkStorage,
+):
+    result = storage.upsert_batch(
+        "alice",
+        [
             {
-                "id": identity["nicknames"][0]["id"],
-                "nickname": "Legacy Nick",
-                "use_count": 1,
-                "last_used_at": "2026-01-02T00:00:00+00:00",
+                "ref": "lin",
+                "name": "Lin",
+                "alias_usages": [
+                    {"alias": "Xiao Lin", "use_count": 2},
+                    {"alias": "Lin Lin", "use_count": 5},
+                ],
             }
-        ]
-    finally:
-        migrated.close()
+        ],
+        [],
+    )
+    character_id = result["refs"]["lin"]
+    character = next(
+        item
+        for item in storage.get_network("alice")["characters"]
+        if item["id"] == character_id
+    )
+    assert [item["alias"] for item in character["alias_usages"]] == [
+        "Lin Lin",
+        "Xiao Lin",
+    ]
+    assert "aliases" not in character
+    assert [item["use_count"] for item in character["alias_usages"]] == [5, 2]
+
+    assert storage.record_alias_mentions("alice", "Xiao Lin is here") == 1
+    character = next(
+        item
+        for item in storage.get_network("alice")["characters"]
+        if item["id"] == character_id
+    )
+    assert [(item["alias"], item["use_count"]) for item in character["alias_usages"]] == [
+        ("Lin Lin", 5),
+        ("Xiao Lin", 3),
+    ]
+
+    storage.upsert_batch(
+        "alice",
+        [
+            {
+                "id": character_id,
+                "name": "Lin",
+                "alias_usages": [
+                    {"alias": "Xiao Lin", "use_count": 9},
+                    {"alias": "New Lin", "use_count": 1},
+                ],
+            }
+        ],
+        [],
+    )
+    character = next(
+        item
+        for item in storage.get_network("alice")["characters"]
+        if item["id"] == character_id
+    )
+    assert [item["alias"] for item in character["alias_usages"]] == [
+        "Xiao Lin",
+        "New Lin",
+    ]
+
+
+def test_relationship_query_supports_aliases_and_overview(storage: NetworkStorage):
+    storage.upsert_batch(
+        "alice",
+        [{"ref": "lin", "name": "Lin", "aliases": ["Xiao Lin"]}],
+        [
+            {
+                "source": "persona",
+                "target": "lin",
+                "type": "朋友",
+                "strength": 80,
+                "status": "active",
+                "description": "多年好友",
+            }
+        ],
+    )
+
+    overview = storage.query_relationships("alice")
+    details = storage.query_relationships("alice", "Xiao Lin")
+
+    assert "1 个人物、1 条关系" in overview
+    assert "Lin" in overview
+    assert "Xiao Lin（使用 1 次）" in details
+    assert "alice -> Lin：朋友" in details
+    assert "多年好友" in details
 
 
 def test_batch_rolls_back_when_a_relationship_reference_is_invalid(
@@ -252,9 +299,10 @@ def test_merge_rewires_and_deduplicates_relationships(storage: NetworkStorage):
     }
     assert len(data["relationships"]) == 1
     assert len(data["evidence"]) == 2
-    assert "Lynn" in next(
+    retained = next(
         item for item in data["characters"] if not item["is_persona"]
-    )["aliases"]
+    )
+    assert "Lynn" in [item["alias"] for item in retained["alias_usages"]]
 
 
 def test_context_matches_alias_and_includes_one_hop(storage: NetworkStorage):
@@ -335,7 +383,7 @@ def test_import_cannot_overwrite_another_personas_uuid(storage: NetworkStorage):
     assert original["name"] == "Alice Person"
 
 
-def test_version_two_import_preserves_nickname_frequency(
+def test_import_preserves_nickname_frequency(
     storage: NetworkStorage, tmp_path: Path
 ):
     sender = {
@@ -347,7 +395,14 @@ def test_version_two_import_preserves_nickname_frequency(
     }
     storage.upsert_batch(
         "alice",
-        [{"ref": "speaker", "name": "Lin", "current_sender": True}],
+        [
+            {
+                "ref": "speaker",
+                "name": "Lin",
+                "current_sender": True,
+                "alias_usages": [{"alias": "Xiao Lin", "use_count": 4}],
+            }
+        ],
         [],
         sender=sender,
     )
@@ -375,6 +430,13 @@ def test_version_two_import_preserves_nickname_frequency(
             ("Xiao Lin", 2),
             ("Lin", 1),
         ]
+        character = next(
+            item
+            for item in restored.get_network("alice")["characters"]
+            if not item["is_persona"]
+        )
+        assert character["alias_usages"][0]["alias"] == "Xiao Lin"
+        assert character["alias_usages"][0]["use_count"] == 4
     finally:
         restored.close()
 

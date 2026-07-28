@@ -17,7 +17,7 @@ from data.plugins.astrbot_plugin_personal_network.main import (
 
 
 def valid_payload() -> dict:
-    """Build a minimal version-one import payload.
+    """Build a minimal current-schema import payload.
 
     Returns:
         Structurally valid relationship-network export.
@@ -26,10 +26,20 @@ def valid_payload() -> dict:
     person_id = str(uuid.uuid4())
     relationship_id = str(uuid.uuid4())
     return {
-        "schema_version": 1,
+        "schema_version": 3,
         "characters": [
-            {"id": root_id, "name": "Persona", "is_persona": True},
-            {"id": person_id, "name": "Lin", "is_persona": False},
+            {
+                "id": root_id,
+                "name": "Persona",
+                "is_persona": True,
+                "alias_usages": [],
+            },
+            {
+                "id": person_id,
+                "name": "Lin",
+                "is_persona": False,
+                "alias_usages": [],
+            },
         ],
         "identities": [],
         "relationships": [
@@ -47,15 +57,22 @@ def valid_payload() -> dict:
 
 
 def test_tool_is_registered_by_decorator():
-    tool = llm_tools.get_func("update_personal_network")
+    update_tool = llm_tools.get_func("update_personal_network")
+    query_tool = llm_tools.get_func("query_personal_network")
 
-    assert tool is not None
-    assert tool.handler is PersonalNetworkPlugin.update_personal_network
-    assert set(tool.parameters["properties"]) == {"characters", "relationships"}
-    assert tool.parameters["properties"]["characters"]["type"] == "array"
-    assert tool.parameters["properties"]["characters"]["items"] == {
+    assert update_tool is not None
+    assert update_tool.handler is PersonalNetworkPlugin.update_personal_network
+    assert set(update_tool.parameters["properties"]) == {
+        "characters",
+        "relationships",
+    }
+    assert update_tool.parameters["properties"]["characters"]["type"] == "array"
+    assert update_tool.parameters["properties"]["characters"]["items"] == {
         "type": "object"
     }
+    assert query_tool is not None
+    assert query_tool.handler is PersonalNetworkPlugin.query_personal_network
+    assert query_tool.parameters["properties"]["query"]["type"] == "string"
 
 
 @pytest.mark.asyncio
@@ -103,23 +120,11 @@ def test_import_rejects_non_image_avatar_data():
         plugin._validate_import(payload)
 
 
-def test_version_one_identity_nickname_is_normalized_to_a_list():
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_import_rejects_older_schema_versions(schema_version: int):
     plugin = PersonalNetworkPlugin.__new__(PersonalNetworkPlugin)
     payload = valid_payload()
-    payload["schema_version"] = 1
-    payload["identities"] = [
-        {
-            "id": str(uuid.uuid4()),
-            "character_id": payload["characters"][1]["id"],
-            "platform": "test",
-            "user_id": "user-1",
-            "session_id": "group-1",
-            "nickname": "Legacy Nick",
-            "updated_at": "2026-01-02T00:00:00+00:00",
-        }
-    ]
+    payload["schema_version"] = schema_version
 
-    normalized = plugin._validate_import(payload)
-    assert normalized["schema_version"] == 2
-    assert normalized["identities"][0]["nicknames"][0]["nickname"] == "Legacy Nick"
-    assert normalized["identities"][0]["nicknames"][0]["use_count"] == 1
+    with pytest.raises(ValueError, match="only schema_version 3"):
+        plugin._validate_import(payload)

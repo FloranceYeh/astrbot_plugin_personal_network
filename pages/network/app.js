@@ -19,6 +19,7 @@ const state = {
   network: { network: {}, characters: [], identities: [], relationships: [], evidence: [] },
   selected: null,
   cy: null,
+  editingAliases: [],
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -27,6 +28,7 @@ const t = (key) => uiText[key] || key;
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
 const splitList = (value) => value.split(/[，,\n]/).map((item) => item.trim()).filter(Boolean);
 const byId = (id) => state.network.characters.find((item) => item.id === id);
+const aliasNames = (character) => (character.alias_usages || []).map((item) => item.alias);
 
 function toast(message, error = false) {
   const item = document.createElement("div");
@@ -144,7 +146,7 @@ function applyGraphFilters() {
   }
   if (query) {
     state.network.characters.forEach((item) => {
-      const haystack = [item.name, ...item.aliases, item.bio].join(" ").toLowerCase();
+      const haystack = [item.name, ...aliasNames(item), item.bio].join(" ").toLowerCase();
       if (!haystack.includes(query)) state.cy.$id(item.id).addClass("filtered");
     });
     state.network.relationships.forEach((item) => {
@@ -181,7 +183,7 @@ function renderInspector() {
   const relations = state.network.relationships.filter((item) => item.source_id === character.id || item.target_id === character.id);
   const identities = state.network.identities.filter((item) => item.character_id === character.id);
   panel.innerHTML = `
-    <div class="profile-heading">${avatarMarkup(character, "large")}<h2>${esc(character.name)}</h2><p class="alias-line">${esc(character.aliases.join(" · ") || (character.is_persona ? t("root") : ""))}</p></div>
+    <div class="profile-heading">${avatarMarkup(character, "large")}<h2>${esc(character.name)}</h2><p class="alias-line">${character.alias_usages?.length ? character.alias_usages.map((item) => `${esc(item.alias)} ×${item.use_count}`).join(" · ") : (character.is_persona ? esc(t("root")) : "")}</p></div>
     <div class="inspector-actions"><button class="primary-button" id="inspect-edit-person">${esc(t("edit"))}</button><button class="secondary-button" id="inspect-avatar">${esc(t("uploadAvatar"))}</button></div>
     <div class="detail-section"><h3>${esc(t("bio"))}</h3><p>${esc(character.bio || t("noDetails"))}</p></div>
     <div class="detail-section"><h3>${esc(t("personality"))}</h3><p>${esc(character.personality || t("noDetails"))}</p></div>
@@ -202,10 +204,10 @@ function renderInspector() {
 
 function renderPeople() {
   const query = $("#people-search").value.trim().toLowerCase();
-  const people = state.network.characters.filter((item) => [item.name, ...item.aliases, item.bio].join(" ").toLowerCase().includes(query));
+  const people = state.network.characters.filter((item) => [item.name, ...aliasNames(item), item.bio].join(" ").toLowerCase().includes(query));
   $("#people-grid").innerHTML = people.length ? people.map((item) => {
     const count = state.network.relationships.filter((relation) => relation.source_id === item.id || relation.target_id === item.id).length;
-    return `<article class="person-card" data-character-id="${esc(item.id)}"><div class="person-card-head">${avatarMarkup(item)}<div><h2>${esc(item.name)}</h2><div class="alias-line">${item.is_persona ? `<span class="root-badge">${esc(t("root"))}</span>` : esc(item.aliases.slice(0, 2).join(" · "))}</div></div></div><p class="bio">${esc(item.bio || item.personality || t("noDetails"))}</p><div class="person-card-footer"><span>${count} ${esc(t("relationCount"))}</span><button type="button">${esc(t("edit"))}</button></div></article>`;
+    return `<article class="person-card" data-character-id="${esc(item.id)}"><div class="person-card-head">${avatarMarkup(item)}<div><h2>${esc(item.name)}</h2><div class="alias-line">${item.is_persona ? `<span class="root-badge">${esc(t("root"))}</span>` : esc(aliasNames(item).slice(0, 2).join(" · "))}</div></div></div><p class="bio">${esc(item.bio || item.personality || t("noDetails"))}</p><div class="person-card-footer"><span>${count} ${esc(t("relationCount"))}</span><button type="button">${esc(t("edit"))}</button></div></article>`;
   }).join("") : `<div class="empty-state"><div class="empty-glyph">○</div><h2>${esc(t("noPeople"))}</h2></div>`;
   $$(".person-card").forEach((card) => {
     card.onclick = () => openCharacterDialog(byId(card.dataset.characterId));
@@ -216,13 +218,27 @@ function openCharacterDialog(character = null) {
   $("#character-form").reset();
   $("#character-id").value = character?.id || "";
   $("#character-name").value = character?.name || "";
-  $("#character-aliases").value = character?.aliases?.join(", ") || "";
+  state.editingAliases = (character?.alias_usages || []).map((item) => ({ ...item }));
+  renderAliasEditor();
   $("#character-bio").value = character?.bio || "";
   $("#character-personality").value = character?.personality || "";
   $("#character-preferences").value = character?.preferences?.join("\n") || "";
   $("#character-facts").value = character?.facts?.join("\n") || "";
   $("#character-notes").value = character?.notes || "";
   $("#character-dialog").showModal();
+}
+
+function renderAliasEditor() {
+  const editor = $("#character-aliases");
+  editor.innerHTML = state.editingAliases.length
+    ? state.editingAliases.map((item, index) => `<div class="alias-row" data-alias-index="${index}"><input class="alias-name" value="${esc(item.alias)}" maxlength="100" aria-label="人物别名" /><div class="alias-count"><input class="alias-use-count" type="number" min="1" max="999999" value="${Math.max(1, Number(item.use_count) || 1)}" aria-label="使用次数" /></div><button class="icon-button alias-delete" type="button" title="删除别名" aria-label="删除别名">×</button></div>`).join("")
+    : '<div class="alias-empty">暂无别名</div>';
+  $$(".alias-row").forEach((row) => {
+    const index = Number(row.dataset.aliasIndex);
+    row.querySelector(".alias-name").oninput = (event) => { state.editingAliases[index].alias = event.target.value; };
+    row.querySelector(".alias-use-count").oninput = (event) => { state.editingAliases[index].use_count = Math.max(1, Number(event.target.value) || 1); };
+    row.querySelector(".alias-delete").onclick = () => { state.editingAliases.splice(index, 1); renderAliasEditor(); };
+  });
 }
 
 function fillCharacterSelects() {
@@ -296,6 +312,7 @@ function bindEvents() {
   $("#status-filter").onchange = applyGraphFilters;
   $("#people-search").oninput = renderPeople;
   $("#add-person-button").onclick = () => openCharacterDialog();
+  $("#add-alias-button").onclick = () => { state.editingAliases.push({ alias: "", use_count: 1, last_used_at: "" }); renderAliasEditor(); $("#character-aliases .alias-row:last-child .alias-name")?.focus(); };
   $("#add-relation-button").onclick = () => openRelationshipDialog();
   $("#merge-button").onclick = () => { fillCharacterSelects(); $("#merge-dialog").showModal(); };
   $("#relationship-strength").oninput = (event) => { $("#strength-output").value = event.target.value; };
@@ -305,7 +322,11 @@ function bindEvents() {
     event.preventDefault();
     const payload = {
       persona_id: state.persona.persona_id, id: $("#character-id").value || undefined,
-      name: $("#character-name").value.trim(), aliases: splitList($("#character-aliases").value),
+      name: $("#character-name").value.trim(),
+      alias_usages: state.editingAliases
+        .map((item) => ({ alias: item.alias.trim(), use_count: Math.max(1, Number(item.use_count) || 1), last_used_at: item.last_used_at || "" }))
+        .filter((item) => item.alias)
+        .sort((left, right) => right.use_count - left.use_count || left.alias.localeCompare(right.alias, "zh-CN")),
       bio: $("#character-bio").value.trim(), personality: $("#character-personality").value.trim(),
       preferences: splitList($("#character-preferences").value), facts: splitList($("#character-facts").value),
       notes: $("#character-notes").value.trim(),
