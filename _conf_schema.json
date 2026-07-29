@@ -11,6 +11,13 @@
     "hint": "关闭后模型看不到 query_personal_network 工具，聊天命令 /关系查询 仍可使用。",
     "default": true
   },
+  "generation_llm_provider": {
+    "description": "关系网生成模型",
+    "type": "string",
+    "_special": "select_provider",
+    "hint": "用于在 WebUI 中根据人格生成虚拟人物关系网；留空使用当前 Provider。",
+    "default": ""
+  },
   "pronoun_history_messages": {
     "description": "代词回溯消息数量",
     "type": "int",

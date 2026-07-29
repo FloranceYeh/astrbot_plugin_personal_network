@@ -717,6 +717,8 @@ class NetworkStorage:
         *,
         sender: dict[str, str] | None = None,
         allow_notes: bool = False,
+        max_characters: int = 20,
+        max_relationships: int = 30,
     ) -> dict[str, Any]:
         """Atomically upsert a bounded batch from the LLM tool or WebUI.
 
@@ -727,6 +729,8 @@ class NetworkStorage:
             interactions: Life events with two or more participant references.
             sender: Trusted current event identity used by ``current_sender``.
             allow_notes: Whether administrator-only notes may be changed.
+            max_characters: Trusted caller-specific character batch limit.
+            max_relationships: Trusted caller-specific relationship batch limit.
 
         Returns:
             IDs resolved for request refs and affected relationship IDs.
@@ -736,9 +740,15 @@ class NetworkStorage:
         """
         relationships = relationships or []
         interactions = interactions or []
-        if len(characters) > 20 or len(relationships) > 30 or len(interactions) > 30:
+        if not 1 <= max_characters <= 32 or not 1 <= max_relationships <= 128:
+            raise ValueError("invalid batch limits")
+        if (
+            len(characters) > max_characters
+            or len(relationships) > max_relationships
+            or len(interactions) > 30
+        ):
             raise ValueError(
-                "a batch may contain at most 20 characters, 30 relationships, and 30 interactions"
+                "batch exceeds the allowed character, relationship, or interaction limit"
             )
         root_id = self.ensure_network(persona_id)
         now = self._now()

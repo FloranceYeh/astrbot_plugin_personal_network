@@ -29,11 +29,20 @@ from astrbot.api.web import (
 from astrbot.core.agent.message import TextPart
 from astrbot.core.star.filter.command import GreedyStr
 
+from .generation import (
+    MAX_GENERATED_CHARACTERS,
+    MAX_GENERATED_RELATIONSHIPS,
+    build_generation_prompts,
+    expected_draft_text,
+    parse_generation_draft,
+    validate_generation_draft,
+)
 from .storage import VALID_RELATIONSHIP_STATUSES, NetworkStorage
 
 PLUGIN_NAME = "astrbot_plugin_personal_network"
 MAX_AVATAR_BYTES = 2 * 1024 * 1024
 MAX_IMPORT_BYTES = 25 * 1024 * 1024
+MAX_GENERATION_RAW_CHARS = 500_000
 
 
 class PersonalNetworkPlugin(Star):
@@ -66,6 +75,9 @@ class PersonalNetworkPlugin(Star):
             ("relationship/delete", self.api_delete_relationship, ["POST"]),
             ("life-event/save", self.api_save_life_event, ["POST"]),
             ("life-event/delete", self.api_delete_life_event, ["POST"]),
+            ("generation/generate", self.api_generate_network, ["POST"]),
+            ("generation/validate", self.api_validate_generation, ["POST"]),
+            ("generation/apply", self.api_apply_generation, ["POST"]),
             ("avatar/<character_id>", self.api_avatar, ["GET", "POST"]),
             ("export", self.api_export, ["GET"]),
             ("import/<persona_key>/preview", self.api_import_preview, ["POST"]),
@@ -574,6 +586,84 @@ class PersonalNetworkPlugin(Star):
             )
         return result
 
+    async def _persona_prompt(self, persona_id: str) -> str:
+        """Load the selected AstrBot persona system prompt for generation."""
+        try:
+            persona = await self.context.persona_manager.get_persona(persona_id)
+            prompt = str(getattr(persona, "system_prompt", "") or "").strip()
+            if prompt:
+                return prompt
+        except Exception:
+            pass
+        try:
+            persona = self.context.persona_manager.get_persona_v3_by_id(persona_id)
+            if persona:
+                prompt = str(persona.get("prompt", "") or "").strip()
+                if prompt:
+                    return prompt
+        except Exception:
+            pass
+        raise ValueError("无法读取所选 AstrBot 人格设定")
+
+    def _generation_provider(self):
+        """Resolve the configured generation provider with the active fallback."""
+        provider_id = str(self.config.get("generation_llm_provider") or "").strip()
+        provider = self.context.get_provider_by_id(provider_id) if provider_id else None
+        provider = provider or self.context.get_using_provider()
+        if not provider:
+            raise ValueError("没有可用的 LLM Provider")
+        return provider
+
+    @staticmethod
+    def _completion_text(response: Any) -> str:
+        """Extract plain completion text from an AstrBot provider response."""
+        for key in ("completion_text", "completion", "text", "content"):
+            value = getattr(response, key, None)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        raise ValueError("LLM 返回了空结果")
+
+    async def _validate_generation_text(
+        self,
+        persona_id: str,
+        raw: str,
+        *,
+        allow_fill_existing: bool,
+        expected_new_count: int | None = None,
+    ) -> dict[str, Any]:
+        """Return a WebUI-ready validation result while preserving raw text."""
+        raw = str(raw or "")
+        if len(raw) > MAX_GENERATION_RAW_CHARS:
+            return {
+                "valid": False,
+                "raw": raw[:MAX_GENERATION_RAW_CHARS],
+                "errors": [f"返回结果超过 {MAX_GENERATION_RAW_CHARS} 个字符"],
+                "expected": expected_draft_text(),
+            }
+        try:
+            network = await asyncio.to_thread(self.storage.get_network, persona_id)
+            parsed = parse_generation_draft(raw)
+            draft = validate_generation_draft(
+                parsed,
+                network,
+                allow_fill_existing=allow_fill_existing,
+                expected_new_count=expected_new_count,
+            )
+            return {
+                "valid": True,
+                "raw": json.dumps(draft, ensure_ascii=False, indent=2),
+                "draft": draft,
+                "errors": [],
+                "expected": expected_draft_text(),
+            }
+        except ValueError as exc:
+            return {
+                "valid": False,
+                "raw": raw,
+                "errors": [str(exc)],
+                "expected": expected_draft_text(),
+            }
+
     async def api_personas(self):
         """Return all active and orphaned persona networks."""
         return json_response({"personas": await self._all_persona_rows()})
@@ -703,6 +793,144 @@ class PersonalNetworkPlugin(Star):
             return json_response({"deleted": True})
         except ValueError as exc:
             return error_response(str(exc))
+
+    async def api_generate_network(self):
+        """Generate and validate a persona-based virtual relationship draft."""
+        try:
+            payload = await self._json_payload()
+            persona_id = str(payload.get("persona_id") or "").strip()
+            if not persona_id:
+                raise ValueError("persona_id is required")
+            try:
+                count = int(payload.get("count", 6))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("生成人数必须是整数") from exc
+            if count < 1 or count > MAX_GENERATED_CHARACTERS:
+                raise ValueError(f"生成人数必须在 1-{MAX_GENERATED_CHARACTERS} 之间")
+            density = str(payload.get("density") or "balanced")
+            allow_fill_existing = payload.get("allow_fill_existing", False)
+            if not isinstance(allow_fill_existing, bool):
+                raise ValueError("allow_fill_existing 必须是布尔值")
+            if not await asyncio.to_thread(self.storage.is_enabled, persona_id):
+                raise ValueError("当前人格的关系网络未启用")
+            persona_prompt = await self._persona_prompt(persona_id)
+            network = await asyncio.to_thread(self.storage.get_network, persona_id)
+            system_prompt, prompt = build_generation_prompts(
+                persona_prompt=persona_prompt,
+                network=network,
+                count=count,
+                density=density,
+                allow_fill_existing=allow_fill_existing,
+            )
+            provider = self._generation_provider()
+            response = await provider.text_chat(
+                prompt=prompt,
+                session_id=f"personal_network_generation_{persona_id}_{uuid.uuid4().hex}",
+                system_prompt=system_prompt,
+            )
+            raw = self._completion_text(response)
+            result = await self._validate_generation_text(
+                persona_id,
+                raw,
+                allow_fill_existing=allow_fill_existing,
+                expected_new_count=count,
+            )
+            logger.info(
+                "[PersonalNetwork] Persona generation completed: persona=%s count=%s valid=%s",
+                persona_id,
+                count,
+                result["valid"],
+            )
+            return json_response(result)
+        except Exception as exc:
+            logger.warning("[PersonalNetwork] Persona generation failed: %s", exc)
+            return json_response(
+                {
+                    "valid": False,
+                    "raw": "",
+                    "errors": [str(exc)],
+                    "expected": expected_draft_text(),
+                }
+            )
+
+    async def api_validate_generation(self):
+        """Validate an administrator-corrected generation result."""
+        try:
+            payload = await self._json_payload()
+            persona_id = str(payload.get("persona_id") or "").strip()
+            allow_fill_existing = payload.get("allow_fill_existing", False)
+            if not persona_id:
+                raise ValueError("persona_id is required")
+            if not isinstance(allow_fill_existing, bool):
+                raise ValueError("allow_fill_existing 必须是布尔值")
+            expected_count = payload.get("expected_count")
+            if expected_count is not None:
+                expected_count = int(expected_count)
+                if expected_count < 1 or expected_count > MAX_GENERATED_CHARACTERS:
+                    raise ValueError("expected_count 超出范围")
+            return json_response(
+                await self._validate_generation_text(
+                    persona_id,
+                    str(payload.get("raw") or ""),
+                    allow_fill_existing=allow_fill_existing,
+                    expected_new_count=expected_count,
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            return json_response(
+                {
+                    "valid": False,
+                    "raw": "",
+                    "errors": [str(exc)],
+                    "expected": expected_draft_text(),
+                }
+            )
+
+    async def api_apply_generation(self):
+        """Revalidate and atomically apply an edited generation draft."""
+        try:
+            payload = await self._json_payload()
+            persona_id = str(payload.get("persona_id") or "").strip()
+            allow_fill_existing = payload.get("allow_fill_existing", False)
+            draft = payload.get("draft")
+            if not persona_id:
+                raise ValueError("persona_id is required")
+            if not isinstance(allow_fill_existing, bool):
+                raise ValueError("allow_fill_existing 必须是布尔值")
+            if not isinstance(draft, dict):
+                raise ValueError("draft 必须是 JSON 对象")
+            network = await asyncio.to_thread(self.storage.get_network, persona_id)
+            normalized = validate_generation_draft(
+                draft,
+                network,
+                allow_fill_existing=allow_fill_existing,
+            )
+            result = await asyncio.to_thread(
+                self.storage.upsert_batch,
+                persona_id,
+                normalized["characters"],
+                normalized["relationships"],
+                [],
+                allow_notes=False,
+                max_characters=MAX_GENERATED_CHARACTERS,
+                max_relationships=MAX_GENERATED_RELATIONSHIPS,
+            )
+            logger.info(
+                "[PersonalNetwork] Applied persona generation: persona=%s characters=%s relationships=%s",
+                persona_id,
+                len(normalized["characters"]),
+                len(normalized["relationships"]),
+            )
+            return json_response({"applied": True, **result})
+        except ValueError as exc:
+            return json_response(
+                {
+                    "applied": False,
+                    "valid": False,
+                    "errors": [str(exc)],
+                    "expected": expected_draft_text(),
+                }
+            )
 
     async def api_avatar(self, character_id: str):
         """Read or replace a normalized character avatar."""

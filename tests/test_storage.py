@@ -785,3 +785,33 @@ def test_version_three_evidence_migrates_to_life_events(tmp_path: Path):
         }
     finally:
         migrated.close()
+
+
+def test_generated_batch_can_atomically_create_thirty_two_people(tmp_path: Path):
+    storage = NetworkStorage(tmp_path / "network.sqlite3")
+    characters = [
+        {"ref": f"person_{index}", "name": f"Person {index}"} for index in range(32)
+    ]
+    relationships = [
+        {
+            "source": "persona",
+            "target": item["ref"],
+            "type": "朋友",
+            "strength": 50,
+        }
+        for item in characters
+    ]
+    try:
+        result = storage.upsert_batch(
+            "alice",
+            characters,
+            relationships,
+            max_characters=32,
+            max_relationships=128,
+        )
+
+        assert len(result["refs"]) == 33
+        assert len(result["relationship_ids"]) == 32
+        assert len(storage.get_network("alice")["characters"]) == 33
+    finally:
+        storage.close()

@@ -22,6 +22,7 @@ const state = {
   cy: null,
   editingAliases: [],
   connection: { sourceId: null, pointerId: null, targetId: null },
+  generation: { draft: null, expected: "", expectedCount: 6, allowFillExisting: false, busy: false },
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -419,6 +420,273 @@ function openRelationshipDialog(relation = null, endpoints = {}) {
   $("#relationship-dialog").showModal();
 }
 
+function setGenerationBusy(busy, label = "") {
+  state.generation.busy = busy;
+  $("#generation-submit").disabled = busy;
+  $("#generation-validate").disabled = busy;
+  $("#generation-apply").disabled = busy || !state.generation.draft;
+  $("#generation-status").textContent = label;
+}
+
+function openGenerationDialog() {
+  state.generation = { draft: null, expected: "", expectedCount: 6, allowFillExisting: false, busy: false };
+  $("#generation-count").value = 6;
+  $("#generation-density").value = "balanced";
+  $("#generation-fill-existing").checked = false;
+  $("#generation-persona-name").textContent = state.persona?.name || "";
+  $("#generation-result").classList.add("hidden");
+  $("#generation-preview").classList.add("hidden");
+  $("#generation-errors").classList.add("hidden");
+  $("#generation-errors").textContent = "";
+  $("#generation-raw").value = "";
+  $("#generation-expected").textContent = "";
+  $("#generation-raw-panel").open = false;
+  setGenerationBusy(false);
+  $("#generation-dialog").showModal();
+}
+
+function generationEndpointOptions() {
+  const options = [];
+  const root = state.network.characters.find((item) => item.is_persona);
+  options.push({ value: "persona", label: `人格 · ${root?.name || state.persona?.name || "当前人格"}` });
+  state.network.characters.filter((item) => !item.is_persona).forEach((item) => {
+    options.push({ value: item.id, label: `现有 · ${item.name}` });
+  });
+  (state.generation.draft?.characters || []).forEach((item) => {
+    if (item.ref) options.push({ value: item.ref, label: `新人物 · ${item.name}` });
+  });
+  return options;
+}
+
+function generationOptionsMarkup(selected) {
+  return generationEndpointOptions().map((item) => `<option value="${esc(item.value)}"${item.value === selected ? " selected" : ""}>${esc(item.label)}</option>`).join("");
+}
+
+function updateGenerationRawFromDraft() {
+  if (!state.generation.draft) return;
+  const clean = {
+    characters: state.generation.draft.characters.map(({ _included, ...item }) => item),
+    relationships: state.generation.draft.relationships.map(({ _included, ...item }) => item),
+  };
+  $("#generation-raw").value = JSON.stringify(clean, null, 2);
+}
+
+function renderGenerationCharacters() {
+  const characters = state.generation.draft?.characters || [];
+  const included = characters.filter((item) => item._included !== false).length;
+  $("#generation-character-count").textContent = `${included} / ${characters.length} 项`;
+  $("#generation-characters").innerHTML = characters.map((item, index) => {
+    const active = item._included !== false;
+    const identifier = item.ref || item.id;
+    return `<details class="generation-item generation-character${active ? "" : " excluded"}" data-generation-character="${index}">
+      <summary><input class="generation-toggle" type="checkbox"${active ? " checked" : ""} aria-label="保留人物" /><span class="generation-item-title"><strong>${esc(item.name)}</strong><span>${item.id ? "补全现有人物" : esc(item.ref)}</span></span></summary>
+      <div class="generation-item-body">
+        <label><span>姓名</span><input data-generation-field="name" maxlength="100" value="${esc(item.name)}"${item.id ? " disabled" : ""} /></label>
+        <label><span>别名</span><input data-generation-list="aliases" value="${esc((item.aliases || []).join("，"))}" /></label>
+        <label class="full"><span>身份简介</span><textarea data-generation-field="bio" maxlength="4000">${esc(item.bio || "")}</textarea></label>
+        <label class="full"><span>性格</span><textarea data-generation-field="personality" maxlength="4000">${esc(item.personality || "")}</textarea></label>
+        <label><span>偏好</span><textarea data-generation-list="preferences">${esc((item.preferences || []).join("\n"))}</textarea></label>
+        <label><span>重要事实</span><textarea data-generation-list="facts">${esc((item.facts || []).join("\n"))}</textarea></label>
+      </div>
+    </details>`;
+  }).join("");
+  $$("[data-generation-character]").forEach((element) => {
+    const index = Number(element.dataset.generationCharacter);
+    const toggle = element.querySelector(".generation-toggle");
+    toggle.onclick = (event) => event.stopPropagation();
+    toggle.onchange = (event) => {
+      event.stopPropagation();
+      const character = state.generation.draft.characters[index];
+      character._included = event.target.checked;
+      if (!character._included) {
+        const endpoint = character.ref || character.id;
+        state.generation.draft.relationships.forEach((relation) => {
+          if (relation.source === endpoint || relation.target === endpoint) relation._included = false;
+        });
+      }
+      renderGenerationPreview();
+    };
+    element.querySelectorAll("[data-generation-field]").forEach((input) => {
+      input.oninput = () => {
+        state.generation.draft.characters[index][input.dataset.generationField] = input.value;
+        updateGenerationRawFromDraft();
+      };
+    });
+    element.querySelectorAll("[data-generation-list]").forEach((input) => {
+      input.oninput = () => {
+        state.generation.draft.characters[index][input.dataset.generationList] = splitList(input.value);
+        updateGenerationRawFromDraft();
+      };
+    });
+  });
+}
+
+function renderGenerationRelationships() {
+  const relationships = state.generation.draft?.relationships || [];
+  const activeCharacters = new Set(
+    (state.generation.draft?.characters || [])
+      .filter((item) => item._included !== false)
+      .map((item) => item.ref || item.id),
+  );
+  relationships.forEach((item) => {
+    const sourceAvailable = item.source === "persona" || activeCharacters.has(item.source) || byId(item.source);
+    const targetAvailable = item.target === "persona" || activeCharacters.has(item.target) || byId(item.target);
+    if (!sourceAvailable || !targetAvailable) item._included = false;
+  });
+  const included = relationships.filter((item) => item._included !== false).length;
+  $("#generation-relationship-count").textContent = `${included} / ${relationships.length} 项`;
+  $("#generation-relationships").innerHTML = relationships.map((item, index) => {
+    const active = item._included !== false;
+    return `<details class="generation-item generation-relationship${active ? "" : " excluded"}" data-generation-relationship="${index}">
+      <summary><input class="generation-toggle" type="checkbox"${active ? " checked" : ""} aria-label="保留关系" /><span class="generation-item-title"><strong>${esc(item.type)}</strong><span>${esc(item.source)} → ${esc(item.target)}</span></span></summary>
+      <div class="generation-item-body">
+        <label><span>关系主体</span><select data-generation-field="source">${generationOptionsMarkup(item.source)}</select></label>
+        <label><span>关联人物</span><select data-generation-field="target">${generationOptionsMarkup(item.target)}</select></label>
+        <label><span>关联人物的身份</span><input data-generation-field="type" maxlength="100" value="${esc(item.type)}" /></label>
+        <label><span>状态</span><select data-generation-field="status"><option value="active"${item.status === "active" ? " selected" : ""}>进行中</option><option value="uncertain"${item.status === "uncertain" ? " selected" : ""}>不确定</option><option value="ended"${item.status === "ended" ? " selected" : ""}>已结束</option></select></label>
+        <label class="full"><span>关系亲密度</span><div class="generation-strength"><input data-generation-number="strength" type="range" min="0" max="100" value="${Number(item.strength) || 0}" /><output>${Number(item.strength) || 0}</output></div></label>
+        <label class="full"><span>关系描述</span><textarea data-generation-field="description" maxlength="2000">${esc(item.description || "")}</textarea></label>
+      </div>
+    </details>`;
+  }).join("");
+  $$("[data-generation-relationship]").forEach((element) => {
+    const index = Number(element.dataset.generationRelationship);
+    const toggle = element.querySelector(".generation-toggle");
+    toggle.onclick = (event) => event.stopPropagation();
+    toggle.onchange = (event) => {
+      event.stopPropagation();
+      state.generation.draft.relationships[index]._included = event.target.checked;
+      renderGenerationRelationships();
+      updateGenerationRawFromDraft();
+    };
+    element.querySelectorAll("[data-generation-field]").forEach((input) => {
+      input.oninput = () => {
+        state.generation.draft.relationships[index][input.dataset.generationField] = input.value;
+        updateGenerationRawFromDraft();
+      };
+    });
+    element.querySelectorAll("[data-generation-number]").forEach((input) => {
+      input.oninput = () => {
+        state.generation.draft.relationships[index][input.dataset.generationNumber] = Number(input.value);
+        input.nextElementSibling.value = input.value;
+        updateGenerationRawFromDraft();
+      };
+    });
+  });
+}
+
+function renderGenerationPreview() {
+  renderGenerationCharacters();
+  renderGenerationRelationships();
+  updateGenerationRawFromDraft();
+  $("#generation-preview").classList.remove("hidden");
+  $("#generation-apply").disabled = state.generation.busy || !state.generation.draft;
+}
+
+function showGenerationResult(result) {
+  state.generation.expected = result.expected || "";
+  $("#generation-result").classList.remove("hidden");
+  $("#generation-raw").value = result.raw || "";
+  $("#generation-expected").textContent = state.generation.expected;
+  const errors = result.errors || [];
+  $("#generation-errors").textContent = errors.join("\n");
+  $("#generation-errors").classList.toggle("hidden", errors.length === 0);
+  if (!result.valid || !result.draft) {
+    state.generation.draft = null;
+    $("#generation-preview").classList.add("hidden");
+    $("#generation-raw-panel").open = true;
+    $("#generation-apply").disabled = true;
+    return;
+  }
+  state.generation.draft = {
+    characters: result.draft.characters.map((item) => ({ ...item, _included: true })),
+    relationships: result.draft.relationships.map((item) => ({ ...item, _included: true })),
+  };
+  $("#generation-raw-panel").open = false;
+  renderGenerationPreview();
+}
+
+function selectedGenerationDraft() {
+  const draft = state.generation.draft;
+  if (!draft) return null;
+  return {
+    characters: draft.characters.filter((item) => item._included !== false).map(({ _included, ...item }) => item),
+    relationships: draft.relationships.filter((item) => item._included !== false).map(({ _included, ...item }) => item),
+  };
+}
+
+async function generateNetworkDraft() {
+  const count = Math.max(1, Math.min(32, Number($("#generation-count").value) || 6));
+  $("#generation-count").value = count;
+  state.generation.expectedCount = count;
+  state.generation.allowFillExisting = $("#generation-fill-existing").checked;
+  setGenerationBusy(true, "正在生成…");
+  try {
+    const result = await bridge.apiPost("generation/generate", {
+      persona_id: state.persona.persona_id,
+      count,
+      density: $("#generation-density").value,
+      allow_fill_existing: state.generation.allowFillExisting,
+    });
+    showGenerationResult(result);
+    $("#generation-status").textContent = result.valid ? "草稿已生成" : "草稿需要修正";
+  } catch (error) {
+    toast(`${t("actionFailed")}: ${error.message}`, true);
+    $("#generation-status").textContent = "生成失败";
+  } finally {
+    setGenerationBusy(false, $("#generation-status").textContent);
+  }
+}
+
+async function validateGenerationRaw() {
+  state.generation.allowFillExisting = $("#generation-fill-existing").checked;
+  setGenerationBusy(true, "正在校验…");
+  try {
+    const result = await bridge.apiPost("generation/validate", {
+      persona_id: state.persona.persona_id,
+      raw: $("#generation-raw").value,
+      expected_count: state.generation.expectedCount,
+      allow_fill_existing: state.generation.allowFillExisting,
+    });
+    showGenerationResult(result);
+    $("#generation-status").textContent = result.valid ? "校验通过" : "校验未通过";
+  } catch (error) {
+    toast(`${t("actionFailed")}: ${error.message}`, true);
+  } finally {
+    setGenerationBusy(false, $("#generation-status").textContent);
+  }
+}
+
+async function applyGenerationDraft() {
+  const draft = selectedGenerationDraft();
+  if (!draft) return;
+  setGenerationBusy(true, "正在应用…");
+  try {
+    const result = await bridge.apiPost("generation/apply", {
+      persona_id: state.persona.persona_id,
+      draft,
+      allow_fill_existing: state.generation.allowFillExisting,
+    });
+    if (!result.applied) {
+      showGenerationResult({
+        valid: false,
+        raw: JSON.stringify(draft, null, 2),
+        errors: result.errors || ["应用失败"],
+        expected: result.expected || state.generation.expected,
+      });
+      $("#generation-status").textContent = "应用前校验未通过";
+      return;
+    }
+    $("#generation-dialog").close();
+    toast("关系网草稿已应用");
+    await loadNetwork();
+  } catch (error) {
+    toast(`${t("actionFailed")}: ${error.message}`, true);
+  } finally {
+    setGenerationBusy(false, $("#generation-status").textContent);
+  }
+}
+
 async function deleteCharacter(id) {
   if (!await confirmAction(t("confirmDeletePerson"), "删除")) return;
   try {
@@ -477,6 +745,10 @@ function bindEvents() {
   $("#status-filter").onchange = applyGraphFilters;
   $("#people-search").oninput = renderPeople;
   $("#add-person-button").onclick = () => openCharacterDialog();
+  $("#generate-network-button").onclick = openGenerationDialog;
+  $("#generation-submit").onclick = generateNetworkDraft;
+  $("#generation-validate").onclick = validateGenerationRaw;
+  $("#generation-apply").onclick = applyGenerationDraft;
   $("#add-alias-button").onclick = () => { state.editingAliases.push({ alias: "", use_count: 1, last_used_at: "" }); renderAliasEditor(); $("#character-aliases .alias-row:last-child .alias-name")?.focus(); };
   $("#add-relation-button").onclick = () => openRelationshipDialog();
   $("#add-life-event-button").onclick = () => openLifeEventDialog();

@@ -80,6 +80,7 @@
             </div>
             <div class="people-actions">
               <button id="merge-button" class="secondary-button" type="button">合并人物</button>
+              <button id="generate-network-button" class="secondary-button" type="button">应用人格生成</button>
               <button id="add-person-button" class="primary-button" type="button"><span aria-hidden="true">＋</span><span>添加人物</span></button>
             </div>
           </div>
@@ -182,6 +183,54 @@
         <div class="dialog-actions">
           <button class="secondary-button close-dialog" type="button">取消</button>
           <button class="primary-button" type="submit">合并人物</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="generation-dialog" class="generation-dialog">
+      <form method="dialog">
+        <div class="dialog-title-row">
+          <div>
+            <h2 class="dialog-title">应用人格生成关系网</h2>
+            <p class="dialog-subtitle" id="generation-persona-name"></p>
+          </div>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <section class="generation-settings">
+          <label><span>生成人数</span><input id="generation-count" type="number" min="1" max="32" value="6" required /></label>
+          <label><span>关系密度</span><select id="generation-density"><option value="sparse">稀疏</option><option value="balanced" selected>均衡</option><option value="rich">丰富</option></select></label>
+          <label class="checkbox-field"><input id="generation-fill-existing" type="checkbox" /><span>补全现有人物的空白资料</span></label>
+          <button id="generation-submit" class="primary-button" type="button">生成草稿</button>
+        </section>
+        <section id="generation-result" class="generation-result hidden">
+          <div id="generation-errors" class="generation-errors hidden"></div>
+          <details id="generation-raw-panel" class="generation-raw-panel">
+            <summary>模型返回与 JSON 修正</summary>
+            <textarea id="generation-raw" spellcheck="false" aria-label="模型返回 JSON"></textarea>
+            <div class="generation-raw-actions">
+              <button id="generation-validate" class="secondary-button" type="button">校验修改</button>
+            </div>
+            <details class="generation-expected">
+              <summary>预期结果</summary>
+              <pre id="generation-expected"></pre>
+            </details>
+          </details>
+          <div id="generation-preview" class="generation-preview hidden">
+            <section>
+              <div class="section-heading"><h3>人物草稿</h3><span id="generation-character-count"></span></div>
+              <div id="generation-characters" class="generation-items"></div>
+            </section>
+            <section>
+              <div class="section-heading"><h3>关系草稿</h3><span id="generation-relationship-count"></span></div>
+              <div id="generation-relationships" class="generation-items"></div>
+            </section>
+          </div>
+        </section>
+        <div class="dialog-actions">
+          <span id="generation-status" class="dialog-status"></span>
+          <span class="dialog-spacer"></span>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button id="generation-apply" class="primary-button" type="button" disabled>确认应用</button>
         </div>
       </form>
     </dialog>
