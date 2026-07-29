@@ -6,6 +6,10 @@
 
 <p align="center">按人格管理虚拟的人际网络中的人物、关系与共同经历，并提供可视化 WebUI。</p>
 
+> 喜欢本插件的朋友可以点一个 `Star⭐`，也欢迎在 Issues 里提出建议或反馈问题。也欢迎给插件提交 PR，帮助完善功能或修复问题。
+
+> 推荐可联动插件 [Virtual Life](https://github.com/FloranceYeh/astrbot_plugin_virtual_life)
+
 Personal Network 是一个按 AstrBot 人格隔离数据的虚拟人生关系网络插件。真实用户、群友和虚构人物都可以成为人格人生中的人物；LLM 与 WebUI 可以记录稳定人物资料、关系和共同经历，后续聊天会按姓名、别名或代词指向注入相关人生上下文。
 
 ## 功能
@@ -81,15 +85,15 @@ SQLite 数据库、头像和临时导出文件存放在 AstrBot 插件数据目�
 
 自动对话经历不保存聊天正文，只保存参与人物、会话时间和固定摘要。LLM 或 WebUI 创建的人生经历保存管理员确认的结构化摘要，不保存完整聊天记录。
 
-## 与 Virtual Life 联动
-
-推荐配合 [astrbot_plugin_virtual_life](https://github.com/FloranceYeh/astrbot_plugin_virtual_life) 使用。Personal Network 负责维护人格生命中的人物、长期关系和共同经历，Virtual Life 负责生成日程、主动消息和随时间实际发生的虚拟生活；组合后，日程模型可以参考既有人际关系安排社交活动，已经结束且带有明确参与人物的日程也可以回写为人生经历。
+## 与其他插件联动
 
 本插件通过 AstrBot 已加载插件实例公开以下异步接口，不需要其他插件访问 SQLite 或调用 WebUI HTTP API：
 
 - `get_network_for_plugin(persona_id)`：取得结构化关系网快照。
 - `get_context_for_plugin(persona_id, max_chars=4000)`：取得带稳定人物 ID 的模型上下文。
 - `record_life_event_from_plugin(...)`：以调用插件的稳定 `source_key` 幂等记录人生经历。
+
+推荐配合 [astrbot_plugin_virtual_life](https://github.com/FloranceYeh/astrbot_plugin_virtual_life) 使用。Personal Network 负责维护人格生命中的人物、长期关系和共同经历，Virtual Life 负责生成日程、主动消息和随时间实际发生的虚拟生活；组合后，日程模型可以参考既有人际关系安排社交活动，已经结束且带有明确参与人物的日程也可以回写为人生经历。
 
 Virtual Life 侧的联动配置默认关闭；未安装本插件时不会产生启动依赖。开启后，Virtual Life 只会回写已经结束且包含 `participant_ids` 的日程项，不会把尚未发生的未来计划提前写入人生经历。
 
