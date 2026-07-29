@@ -153,9 +153,11 @@ dialog form { padding: 0 22px 20px; }
 .generation-dialog form { max-height: calc(100vh - 42px); overflow: auto; }
 .generation-settings { display: grid; grid-template-columns: 140px 180px minmax(220px, 1fr) auto; gap: 12px; align-items: end; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
 .generation-settings label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 600; }
-.generation-settings input, .generation-settings select { width: 100%; min-height: 38px; padding: 8px 10px; }
+.generation-settings input, .generation-settings select, .generation-settings textarea { width: 100%; min-height: 38px; padding: 8px 10px; }
 .generation-settings .checkbox-field { min-height: 38px; display: flex; align-items: center; gap: 8px; color: var(--text); }
 .generation-settings .checkbox-field input { width: 17px; min-height: 17px; }
+.generation-settings .generation-hint { grid-column: 1 / -1; }
+.generation-settings .generation-hint textarea { min-height: 76px; resize: vertical; }
 .generation-result { display: grid; gap: 14px; padding-top: 16px; }
 .generation-errors { padding: 11px 13px; border-left: 4px solid var(--coral); background: color-mix(in srgb, var(--coral) 10%, var(--surface)); color: var(--text); font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
 .generation-raw-panel { border: 1px solid var(--border); border-radius: 6px; }
@@ -223,5 +225,5 @@ dialog form { padding: 0 22px 20px; }
   .alias-row { grid-template-columns: minmax(0, 1fr) 96px 36px; }
   .dialog-actions { flex-wrap: wrap; }
   .generation-settings, .generation-item-body { grid-template-columns: 1fr; }
-  .generation-settings .checkbox-field, .generation-item-body label.full { grid-column: auto; }
+  .generation-settings .checkbox-field, .generation-settings .generation-hint, .generation-item-body label.full { grid-column: auto; }
 }

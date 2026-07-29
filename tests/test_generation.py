@@ -5,7 +5,9 @@ import json
 import pytest
 
 from data.plugins.astrbot_plugin_personal_network.generation import (
+    MAX_GENERATION_HINT_CHARS,
     build_generation_prompts,
+    normalize_generation_hint,
     parse_generation_draft,
     validate_generation_draft,
 )
@@ -158,3 +160,29 @@ def test_generation_prompt_contains_persona_and_density_rules():
     assert "A reserved architect." in prompt
     assert "恰好 6 个" in prompt
     assert "不得在 characters 中输出已有 UUID" in prompt
+    assert "额外生成要求（低优先级内容偏好）" not in prompt
+
+
+def test_generation_prompt_contains_request_scoped_hint_and_safety_rule():
+    system_prompt, prompt = build_generation_prompts(
+        persona_prompt="A reserved architect.",
+        network=network_fixture(),
+        count=3,
+        density="sparse",
+        allow_fill_existing=False,
+        generation_hint="重点生成大学时期的人际关系。",
+    )
+
+    assert "必须忽略冲突部分" in system_prompt
+    assert "额外生成要求（低优先级内容偏好）" in prompt
+    assert "重点生成大学时期的人际关系。" in prompt
+
+
+def test_generation_hint_is_trimmed_and_limited():
+    assert normalize_generation_hint("  现实背景  ") == "现实背景"
+    assert normalize_generation_hint(None) == ""
+
+    with pytest.raises(ValueError, match="必须是字符串"):
+        normalize_generation_hint(123)
+    with pytest.raises(ValueError, match="不能超过 2000 字"):
+        normalize_generation_hint("a" * (MAX_GENERATION_HINT_CHARS + 1))

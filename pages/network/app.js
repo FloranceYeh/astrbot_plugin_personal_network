@@ -433,6 +433,7 @@ function openGenerationDialog() {
   $("#generation-count").value = 6;
   $("#generation-density").value = "balanced";
   $("#generation-fill-existing").checked = false;
+  $("#generation-hint").value = "";
   $("#generation-persona-name").textContent = state.persona?.name || "";
   $("#generation-result").classList.add("hidden");
   $("#generation-preview").classList.add("hidden");
@@ -617,6 +618,12 @@ function selectedGenerationDraft() {
 
 async function generateNetworkDraft() {
   const count = Math.max(1, Math.min(32, Number($("#generation-count").value) || 6));
+  const generationHint = $("#generation-hint").value.trim();
+  if ([...generationHint].length > 2000) {
+    toast("额外生成要求不能超过 2000 字", true);
+    $("#generation-status").textContent = "生成要求过长";
+    return;
+  }
   $("#generation-count").value = count;
   state.generation.expectedCount = count;
   state.generation.allowFillExisting = $("#generation-fill-existing").checked;
@@ -627,6 +634,7 @@ async function generateNetworkDraft() {
       count,
       density: $("#generation-density").value,
       allow_fill_existing: state.generation.allowFillExisting,
+      generation_hint: generationHint,
     });
     showGenerationResult(result);
     $("#generation-status").textContent = result.valid ? "草稿已生成" : "草稿需要修正";
@@ -749,6 +757,7 @@ function bindEvents() {
   $("#generation-submit").onclick = generateNetworkDraft;
   $("#generation-validate").onclick = validateGenerationRaw;
   $("#generation-apply").onclick = applyGenerationDraft;
+  $("#generation-dialog").addEventListener("close", () => { $("#generation-hint").value = ""; });
   $("#add-alias-button").onclick = () => { state.editingAliases.push({ alias: "", use_count: 1, last_used_at: "" }); renderAliasEditor(); $("#character-aliases .alias-row:last-child .alias-name")?.focus(); };
   $("#add-relation-button").onclick = () => openRelationshipDialog();
   $("#add-life-event-button").onclick = () => openLifeEventDialog();

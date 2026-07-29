@@ -34,6 +34,7 @@ from .generation import (
     MAX_GENERATED_RELATIONSHIPS,
     build_generation_prompts,
     expected_draft_text,
+    normalize_generation_hint,
     parse_generation_draft,
     validate_generation_draft,
 )
@@ -811,6 +812,9 @@ class PersonalNetworkPlugin(Star):
             allow_fill_existing = payload.get("allow_fill_existing", False)
             if not isinstance(allow_fill_existing, bool):
                 raise ValueError("allow_fill_existing 必须是布尔值")
+            generation_hint = normalize_generation_hint(
+                payload.get("generation_hint", "")
+            )
             if not await asyncio.to_thread(self.storage.is_enabled, persona_id):
                 raise ValueError("当前人格的关系网络未启用")
             persona_prompt = await self._persona_prompt(persona_id)
@@ -821,6 +825,7 @@ class PersonalNetworkPlugin(Star):
                 count=count,
                 density=density,
                 allow_fill_existing=allow_fill_existing,
+                generation_hint=generation_hint,
             )
             provider = self._generation_provider()
             response = await provider.text_chat(
@@ -836,9 +841,12 @@ class PersonalNetworkPlugin(Star):
                 expected_new_count=count,
             )
             logger.info(
-                "[PersonalNetwork] Persona generation completed: persona=%s count=%s valid=%s",
+                "[PersonalNetwork] Persona generation completed: persona=%s count=%s "
+                "hint=%s hint_chars=%s valid=%s",
                 persona_id,
                 count,
+                bool(generation_hint),
+                len(generation_hint),
                 result["valid"],
             )
             return json_response(result)
