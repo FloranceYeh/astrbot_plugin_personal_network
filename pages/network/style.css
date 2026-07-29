@@ -72,7 +72,14 @@ select { min-height: 36px; padding: 0 32px 0 10px; }
 .primary-button:hover { background: var(--accent-strong); }
 .danger-button { color: white; border: 1px solid var(--coral); background: var(--coral); }
 .graph-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 340px; height: calc(100vh - 181px); min-height: 480px; }
+.graph-canvas { position: relative; min-width: 0; height: 100%; overflow: hidden; }
 #network-graph { min-width: 0; height: 100%; background-color: var(--bg); background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px); background-size: 28px 28px; background-position: -1px -1px; }
+.connection-overlay { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.connection-overlay line { display: none; stroke: var(--coral); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 7 5; }
+.connection-overlay.active line { display: block; }
+.connection-handle { position: absolute; z-index: 4; width: 28px; height: 28px; padding: 0; display: grid; place-items: center; transform: translate(-50%, -50%); border: 2px solid var(--surface); border-radius: 50%; background: var(--coral); color: white; box-shadow: 0 2px 9px rgb(23 33 38 / 28%); font-size: 18px; font-weight: 700; line-height: 1; touch-action: none; cursor: crosshair; }
+.connection-handle:hover, .connection-handle:focus-visible { box-shadow: 0 0 0 4px color-mix(in srgb, var(--coral) 24%, transparent), 0 2px 9px rgb(23 33 38 / 28%); }
+.connection-handle.dragging { opacity: 0; }
 .inspector { overflow: auto; padding: 18px; background: var(--surface); border-left: 1px solid var(--border); }
 .inspector.empty { display: grid; place-items: center; }
 .empty-state { text-align: center; color: var(--muted); }
@@ -154,7 +161,7 @@ dialog form { padding: 0 22px 20px; }
   .graph-toolbar { flex-wrap: wrap; }
   .search-field { min-width: 180px; }
   .graph-workspace { grid-template-columns: 1fr; height: auto; }
-  #network-graph { height: 58vh; min-height: 420px; }
+  .graph-canvas, #network-graph { height: 58vh; min-height: 420px; }
   .inspector { min-height: 280px; border-left: 0; border-top: 1px solid var(--border); }
   .people-toolbar { align-items: stretch; flex-direction: column; }
   .people-actions { justify-content: flex-end; }

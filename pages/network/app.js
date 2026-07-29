@@ -21,6 +21,7 @@ const state = {
   selected: null,
   cy: null,
   editingAliases: [],
+  connection: { sourceId: null, pointerId: null, targetId: null },
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -131,6 +132,99 @@ function graphElements() {
   return [...nodes, ...edges];
 }
 
+function resetConnectionDrag() {
+  state.connection.pointerId = null;
+  state.connection.targetId = null;
+  state.cy?.nodes().removeClass("connection-target");
+  $("#connection-overlay").classList.remove("active");
+  updateConnectionHandle();
+}
+
+function updateConnectionHandle() {
+  const handle = $("#connection-handle");
+  if (!state.cy) {
+    handle.classList.add("hidden");
+    return;
+  }
+  if (state.connection.pointerId !== null) {
+    handle.classList.remove("hidden");
+    handle.classList.add("dragging");
+    return;
+  }
+  handle.classList.remove("dragging");
+  const sourceId = state.selected?.type === "character" ? state.selected.id : null;
+  const node = sourceId ? state.cy.$id(sourceId) : null;
+  if (!node || !node.length || node.hasClass("filtered")) {
+    state.connection.sourceId = null;
+    handle.classList.add("hidden");
+    return;
+  }
+  state.connection.sourceId = sourceId;
+  const position = node.renderedPosition();
+  handle.style.left = `${position.x + node.renderedWidth() / 2}px`;
+  handle.style.top = `${position.y}px`;
+  handle.classList.remove("hidden");
+}
+
+function connectionTargetAt(clientX, clientY) {
+  const rect = $("#graph-canvas").getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  let matched = null;
+  state.cy.nodes().forEach((node) => {
+    if (matched || node.id() === state.connection.sourceId || node.hasClass("filtered")) return;
+    const box = node.renderedBoundingBox({ includeLabels: false, includeOverlays: false });
+    if (x >= box.x1 - 8 && x <= box.x2 + 8 && y >= box.y1 - 8 && y <= box.y2 + 8) matched = node;
+  });
+  return { node: matched, x, y };
+}
+
+function startConnectionDrag(event) {
+  if (!state.connection.sourceId || !state.cy) return;
+  event.preventDefault();
+  event.stopPropagation();
+  state.connection.pointerId = event.pointerId;
+  const source = state.cy.$id(state.connection.sourceId);
+  const position = source.renderedPosition();
+  const line = $("#connection-line");
+  line.setAttribute("x1", position.x);
+  line.setAttribute("y1", position.y);
+  line.setAttribute("x2", position.x);
+  line.setAttribute("y2", position.y);
+  $("#connection-overlay").classList.add("active");
+  $("#connection-handle").classList.add("dragging");
+  $("#connection-handle").setPointerCapture?.(event.pointerId);
+}
+
+function moveConnectionDrag(event) {
+  if (state.connection.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  const target = connectionTargetAt(event.clientX, event.clientY);
+  $("#connection-line").setAttribute("x2", target.x);
+  $("#connection-line").setAttribute("y2", target.y);
+  state.cy.nodes().removeClass("connection-target");
+  state.connection.targetId = target.node?.id() || null;
+  target.node?.addClass("connection-target");
+}
+
+function finishConnectionDrag(event) {
+  if (state.connection.pointerId !== event.pointerId) return;
+  const sourceId = state.connection.sourceId;
+  const targetId = state.connection.targetId;
+  resetConnectionDrag();
+  if (sourceId && targetId && sourceId !== targetId) {
+    openRelationshipDialog(null, { sourceId, targetId });
+  }
+}
+
+function bindConnectionHandle() {
+  const handle = $("#connection-handle");
+  handle.onpointerdown = startConnectionDrag;
+  handle.onpointermove = moveConnectionDrag;
+  handle.onpointerup = finishConnectionDrag;
+  handle.onpointercancel = resetConnectionDrag;
+}
+
 function renderGraph() {
   const styles = getComputedStyle(document.documentElement);
   if (state.cy) state.cy.destroy();
@@ -149,6 +243,7 @@ function renderGraph() {
       { selector: "node.has-avatar", style: { "background-image": "data(avatar)", "background-fit": "cover" } },
       { selector: "node.persona-root", style: { width: 76, height: 76, "border-width": 4, "background-color": styles.getPropertyValue("--amber").trim(), "border-color": styles.getPropertyValue("--amber").trim() } },
       { selector: "node:selected", style: { "border-width": 5, "border-color": styles.getPropertyValue("--coral").trim() } },
+      { selector: "node.connection-target", style: { "border-width": 7, "border-color": styles.getPropertyValue("--coral").trim(), "overlay-opacity": 0.12, "overlay-color": styles.getPropertyValue("--coral").trim(), "overlay-padding": 9 } },
       { selector: "edge", style: {
         width: "mapData(strength, 0, 100, 1, 5)", "curve-style": "bezier", "target-arrow-shape": "triangle",
         "line-color": styles.getPropertyValue("--accent").trim(), "target-arrow-color": styles.getPropertyValue("--accent").trim(),
@@ -165,11 +260,14 @@ function renderGraph() {
   state.cy.on("tap", "node, edge", (event) => {
     state.selected = { type: event.target.isNode() ? "character" : "relationship", id: event.target.id() };
     renderInspector();
+    updateConnectionHandle();
   });
   state.cy.on("tap", (event) => {
-    if (event.target === state.cy) { state.selected = null; renderInspector(); }
+    if (event.target === state.cy) { state.selected = null; renderInspector(); updateConnectionHandle(); }
   });
+  state.cy.on("pan zoom resize render position", updateConnectionHandle);
   applyGraphFilters();
+  updateConnectionHandle();
 }
 
 function applyGraphFilters() {
@@ -190,6 +288,7 @@ function applyGraphFilters() {
       if (!haystack.includes(query)) state.cy.$id(item.id).addClass("filtered");
     });
   }
+  updateConnectionHandle();
 }
 
 function renderInspector() {
@@ -305,12 +404,12 @@ function openLifeEventDialog(item = null) {
   $("#life-event-dialog").showModal();
 }
 
-function openRelationshipDialog(relation = null) {
+function openRelationshipDialog(relation = null, endpoints = {}) {
   fillCharacterSelects();
   $("#relationship-form").reset();
   $("#relationship-id").value = relation?.id || "";
-  $("#relationship-source").value = relation?.source_id || state.network.characters.find((item) => item.is_persona)?.id || "";
-  $("#relationship-target").value = relation?.target_id || state.network.characters.find((item) => !item.is_persona)?.id || "";
+  $("#relationship-source").value = relation?.source_id || endpoints.sourceId || state.network.characters.find((item) => item.is_persona)?.id || "";
+  $("#relationship-target").value = relation?.target_id || endpoints.targetId || state.network.characters.find((item) => !item.is_persona)?.id || "";
   $("#relationship-type").value = relation?.relation_type || "";
   $("#relationship-status").value = relation?.status || "active";
   $("#relationship-strength").value = relation?.strength ?? 0;
@@ -476,6 +575,7 @@ function bindEvents() {
 async function start() {
   await bridge.ready();
   bindEvents();
+  bindConnectionHandle();
   bridge.onContext(() => {
     renderSummary(); renderPeople(); renderInspector(); renderGraph();
   });

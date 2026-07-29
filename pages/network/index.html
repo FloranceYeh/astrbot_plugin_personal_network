@@ -56,7 +56,13 @@
             <button id="add-relation-button" class="tool-button" type="button"><span aria-hidden="true">＋</span><span>添加关系</span></button>
           </div>
           <div class="graph-workspace">
-            <div id="network-graph" role="img" aria-label="人物关系网络"></div>
+            <div id="graph-canvas" class="graph-canvas">
+              <div id="network-graph" role="img" aria-label="人物关系网络"></div>
+              <svg id="connection-overlay" class="connection-overlay" aria-hidden="true">
+                <line id="connection-line" x1="0" y1="0" x2="0" y2="0"></line>
+              </svg>
+              <button id="connection-handle" class="connection-handle hidden" type="button" title="拖到另一人物以添加关系" aria-label="拖拽添加关系">＋</button>
+            </div>
             <aside id="inspector" class="inspector empty">
               <div class="empty-state">
                 <div class="empty-glyph">⌁</div>
