@@ -8,6 +8,7 @@ import binascii
 import io
 import json
 import re
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,6 +45,8 @@ PLUGIN_NAME = "astrbot_plugin_personal_network"
 MAX_AVATAR_BYTES = 2 * 1024 * 1024
 MAX_IMPORT_BYTES = 25 * 1024 * 1024
 MAX_GENERATION_RAW_CHARS = 500_000
+GENERATION_JOB_TTL_SECONDS = 15 * 60
+GENERATION_TASK_TIMEOUT_SECONDS = 10 * 60
 
 
 class PersonalNetworkPlugin(Star):
@@ -65,6 +68,8 @@ class PersonalNetworkPlugin(Star):
         self.export_dir.mkdir(parents=True, exist_ok=True)
         self.storage = NetworkStorage(self.data_dir / "personal_network.sqlite3")
         self._import_previews: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._generation_jobs: dict[str, dict[str, Any]] = {}
+        self._generation_tasks: set[asyncio.Task[None]] = set()
         routes = [
             ("personas", self.api_personas, ["GET"]),
             ("network", self.api_network, ["GET"]),
@@ -77,6 +82,7 @@ class PersonalNetworkPlugin(Star):
             ("life-event/save", self.api_save_life_event, ["POST"]),
             ("life-event/delete", self.api_delete_life_event, ["POST"]),
             ("generation/generate", self.api_generate_network, ["POST"]),
+            ("generation/status", self.api_generation_status, ["POST"]),
             ("generation/validate", self.api_validate_generation, ["POST"]),
             ("generation/apply", self.api_apply_generation, ["POST"]),
             ("avatar/<character_id>", self.api_avatar, ["GET", "POST"]),
@@ -665,6 +671,168 @@ class PersonalNetworkPlugin(Star):
                 "expected": expected_draft_text(),
             }
 
+    def _prune_generation_jobs(self) -> None:
+        """Discard completed generation jobs after their result retention window."""
+        cutoff = time.monotonic() - GENERATION_JOB_TTL_SECONDS
+        expired = [
+            job_id
+            for job_id, job in self._generation_jobs.items()
+            if job["status"] in {"completed", "failed"}
+            and job["updated_at"] < cutoff
+        ]
+        for job_id in expired:
+            self._generation_jobs.pop(job_id, None)
+
+    def _active_generation_job(self, persona_id: str) -> str | None:
+        """Return the active generation job for one persona, when present."""
+        self._prune_generation_jobs()
+        for job_id, job in self._generation_jobs.items():
+            if job["persona_id"] == persona_id and job["status"] in {
+                "pending",
+                "running",
+            }:
+                return job_id
+        return None
+
+    def _generation_failure_result(self, message: str) -> dict[str, Any]:
+        """Build the result shown when a background generation task fails."""
+        return {
+            "valid": False,
+            "raw": "",
+            "errors": [message],
+            "expected": expected_draft_text(),
+        }
+
+    async def _run_generation_job(
+        self,
+        job_id: str,
+        *,
+        persona_id: str,
+        count: int,
+        density: str,
+        allow_fill_existing: bool,
+        generation_hint: str,
+    ) -> None:
+        """Run one persona generation request outside the WebUI HTTP request."""
+        job = self._generation_jobs.get(job_id)
+        if not job:
+            return
+        job["status"] = "running"
+        job["updated_at"] = time.monotonic()
+        try:
+            persona_prompt = await self._persona_prompt(persona_id)
+            network = await asyncio.to_thread(self.storage.get_network, persona_id)
+            system_prompt, prompt = build_generation_prompts(
+                persona_prompt=persona_prompt,
+                network=network,
+                count=count,
+                density=density,
+                allow_fill_existing=allow_fill_existing,
+                generation_hint=generation_hint,
+            )
+            provider = self._generation_provider()
+            response = await asyncio.wait_for(
+                provider.text_chat(
+                    prompt=prompt,
+                    session_id=f"personal_network_generation_{persona_id}_{job_id}",
+                    system_prompt=system_prompt,
+                ),
+                timeout=GENERATION_TASK_TIMEOUT_SECONDS,
+            )
+            raw = self._completion_text(response)
+            result = await self._validate_generation_text(
+                persona_id,
+                raw,
+                allow_fill_existing=allow_fill_existing,
+                expected_new_count=count,
+            )
+            job["status"] = "completed"
+            job["result"] = result
+            logger.info(
+                "[PersonalNetwork] Persona generation completed: job=%s persona=%s "
+                "count=%s hint=%s hint_chars=%s valid=%s",
+                job_id,
+                persona_id,
+                count,
+                bool(generation_hint),
+                len(generation_hint),
+                result["valid"],
+            )
+        except TimeoutError:
+            job["status"] = "failed"
+            job["result"] = self._generation_failure_result(
+                "生成任务等待模型超过 10 分钟"
+            )
+            logger.warning(
+                "[PersonalNetwork] Persona generation timed out: job=%s persona=%s",
+                job_id,
+                persona_id,
+            )
+        except asyncio.CancelledError:
+            job["status"] = "failed"
+            job["result"] = self._generation_failure_result("生成任务已取消")
+            raise
+        except Exception as exc:
+            job["status"] = "failed"
+            job["result"] = self._generation_failure_result(str(exc))
+            logger.warning(
+                "[PersonalNetwork] Persona generation failed: job=%s persona=%s error=%s",
+                job_id,
+                persona_id,
+                exc,
+            )
+        finally:
+            job["updated_at"] = time.monotonic()
+
+    def _start_generation_job(
+        self,
+        *,
+        persona_id: str,
+        count: int,
+        density: str,
+        allow_fill_existing: bool,
+        generation_hint: str,
+    ) -> tuple[str, bool]:
+        """Create one tracked generation task or reuse the persona's active job."""
+        existing_job_id = self._active_generation_job(persona_id)
+        if existing_job_id:
+            return existing_job_id, True
+        job_id = uuid.uuid4().hex
+        now = time.monotonic()
+        self._generation_jobs[job_id] = {
+            "persona_id": persona_id,
+            "status": "pending",
+            "result": None,
+            "count": count,
+            "density": density,
+            "allow_fill_existing": allow_fill_existing,
+            "created_at": now,
+            "updated_at": now,
+        }
+        task = asyncio.create_task(
+            self._run_generation_job(
+                job_id,
+                persona_id=persona_id,
+                count=count,
+                density=density,
+                allow_fill_existing=allow_fill_existing,
+                generation_hint=generation_hint,
+            ),
+            name=f"personal-network-generation-{job_id}",
+        )
+        self._generation_tasks.add(task)
+        task.add_done_callback(self._generation_tasks.discard)
+        logger.info(
+            "[PersonalNetwork] Persona generation started: job=%s persona=%s count=%s "
+            "hint=%s hint_chars=%s",
+            job_id,
+            persona_id,
+            count,
+            bool(generation_hint),
+            len(generation_hint),
+        )
+        return job_id, False
+
     async def api_personas(self):
         """Return all active and orphaned persona networks."""
         return json_response({"personas": await self._all_persona_rows()})
@@ -796,7 +964,7 @@ class PersonalNetworkPlugin(Star):
             return error_response(str(exc))
 
     async def api_generate_network(self):
-        """Generate and validate a persona-based virtual relationship draft."""
+        """Start persona-based relationship generation without blocking HTTP."""
         try:
             payload = await self._json_payload()
             persona_id = str(payload.get("persona_id") or "").strip()
@@ -817,49 +985,51 @@ class PersonalNetworkPlugin(Star):
             )
             if not await asyncio.to_thread(self.storage.is_enabled, persona_id):
                 raise ValueError("当前人格的关系网络未启用")
-            persona_prompt = await self._persona_prompt(persona_id)
-            network = await asyncio.to_thread(self.storage.get_network, persona_id)
-            system_prompt, prompt = build_generation_prompts(
-                persona_prompt=persona_prompt,
-                network=network,
+            job_id, reused = self._start_generation_job(
+                persona_id=persona_id,
                 count=count,
                 density=density,
                 allow_fill_existing=allow_fill_existing,
                 generation_hint=generation_hint,
             )
-            provider = self._generation_provider()
-            response = await provider.text_chat(
-                prompt=prompt,
-                session_id=f"personal_network_generation_{persona_id}_{uuid.uuid4().hex}",
-                system_prompt=system_prompt,
-            )
-            raw = self._completion_text(response)
-            result = await self._validate_generation_text(
-                persona_id,
-                raw,
-                allow_fill_existing=allow_fill_existing,
-                expected_new_count=count,
-            )
-            logger.info(
-                "[PersonalNetwork] Persona generation completed: persona=%s count=%s "
-                "hint=%s hint_chars=%s valid=%s",
-                persona_id,
-                count,
-                bool(generation_hint),
-                len(generation_hint),
-                result["valid"],
-            )
-            return json_response(result)
-        except Exception as exc:
-            logger.warning("[PersonalNetwork] Persona generation failed: %s", exc)
+            job = self._generation_jobs[job_id]
             return json_response(
                 {
-                    "valid": False,
-                    "raw": "",
-                    "errors": [str(exc)],
-                    "expected": expected_draft_text(),
+                    "job_id": job_id,
+                    "status": job["status"],
+                    "expected_count": job["count"],
+                    "density": job["density"],
+                    "allow_fill_existing": job["allow_fill_existing"],
+                    "reused": reused,
                 }
             )
+        except ValueError as exc:
+            return error_response(str(exc))
+
+    async def api_generation_status(self):
+        """Return the current state or retained result of a generation job."""
+        try:
+            payload = await self._json_payload()
+            persona_id = str(payload.get("persona_id") or "").strip()
+            job_id = str(payload.get("job_id") or "").strip()
+            if not persona_id or not job_id:
+                raise ValueError("persona_id and job_id are required")
+            self._prune_generation_jobs()
+            job = self._generation_jobs.get(job_id)
+            if not job or job["persona_id"] != persona_id:
+                raise ValueError("生成任务不存在或已过期")
+            response = {
+                "job_id": job_id,
+                "status": job["status"],
+                "expected_count": job["count"],
+                "density": job["density"],
+                "allow_fill_existing": job["allow_fill_existing"],
+            }
+            if job["status"] in {"completed", "failed"}:
+                response["result"] = job["result"]
+            return json_response(response)
+        except ValueError as exc:
+            return error_response(str(exc))
 
     async def api_validate_generation(self):
         """Validate an administrator-corrected generation result."""
@@ -1340,5 +1510,12 @@ class PersonalNetworkPlugin(Star):
             return error_response(str(exc))
 
     async def terminate(self) -> None:
-        """Close plugin storage during unload."""
+        """Cancel background generation and close storage during unload."""
+        tasks = list(self._generation_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._generation_tasks.clear()
+        self._generation_jobs.clear()
         self.storage.close()

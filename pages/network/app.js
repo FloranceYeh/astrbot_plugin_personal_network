@@ -22,8 +22,10 @@ const state = {
   cy: null,
   editingAliases: [],
   connection: { sourceId: null, pointerId: null, targetId: null },
-  generation: { draft: null, expected: "", expectedCount: 6, allowFillExisting: false, busy: false },
+  generation: { draft: null, expected: "", expectedCount: 6, allowFillExisting: false, busy: false, jobId: null },
 };
+
+let generationPollToken = 0;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -429,7 +431,8 @@ function setGenerationBusy(busy, label = "") {
 }
 
 function openGenerationDialog() {
-  state.generation = { draft: null, expected: "", expectedCount: 6, allowFillExisting: false, busy: false };
+  generationPollToken += 1;
+  state.generation = { draft: null, expected: "", expectedCount: 6, allowFillExisting: false, busy: false, jobId: null };
   $("#generation-count").value = 6;
   $("#generation-density").value = "balanced";
   $("#generation-fill-existing").checked = false;
@@ -617,6 +620,12 @@ function selectedGenerationDraft() {
 }
 
 async function generateNetworkDraft() {
+  if (state.generation.jobId) {
+    const pollToken = ++generationPollToken;
+    setGenerationBusy(true, "正在重新查询生成任务…");
+    await pollGenerationJob(state.generation.jobId, pollToken);
+    return;
+  }
   const count = Math.max(1, Math.min(32, Number($("#generation-count").value) || 6));
   const generationHint = $("#generation-hint").value.trim();
   if ([...generationHint].length > 2000) {
@@ -627,22 +636,71 @@ async function generateNetworkDraft() {
   $("#generation-count").value = count;
   state.generation.expectedCount = count;
   state.generation.allowFillExisting = $("#generation-fill-existing").checked;
+  const pollToken = ++generationPollToken;
   setGenerationBusy(true, "正在生成…");
   try {
-    const result = await bridge.apiPost("generation/generate", {
+    const job = await bridge.apiPost("generation/generate", {
       persona_id: state.persona.persona_id,
       count,
       density: $("#generation-density").value,
       allow_fill_existing: state.generation.allowFillExisting,
       generation_hint: generationHint,
     });
-    showGenerationResult(result);
-    $("#generation-status").textContent = result.valid ? "草稿已生成" : "草稿需要修正";
+    if (pollToken !== generationPollToken) return;
+    state.generation.jobId = job.job_id;
+    state.generation.expectedCount = Number(job.expected_count) || count;
+    state.generation.allowFillExisting = Boolean(job.allow_fill_existing);
+    $("#generation-count").value = state.generation.expectedCount;
+    if (job.density) $("#generation-density").value = job.density;
+    $("#generation-fill-existing").checked = state.generation.allowFillExisting;
+    if (job.reused) $("#generation-status").textContent = "继续等待此前生成任务…";
+    await pollGenerationJob(job.job_id, pollToken);
   } catch (error) {
+    if (pollToken !== generationPollToken) return;
     toast(`${t("actionFailed")}: ${error.message}`, true);
-    $("#generation-status").textContent = "生成失败";
-  } finally {
-    setGenerationBusy(false, $("#generation-status").textContent);
+    setGenerationBusy(false, "生成失败");
+  }
+}
+
+const waitForGenerationPoll = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+
+async function pollGenerationJob(jobId, pollToken) {
+  let failures = 0;
+  while (pollToken === generationPollToken && $("#generation-dialog").open) {
+    try {
+      const job = await bridge.apiPost("generation/status", {
+        persona_id: state.persona.persona_id,
+        job_id: jobId,
+      });
+      if (pollToken !== generationPollToken) return;
+      failures = 0;
+      state.generation.expectedCount = Number(job.expected_count) || state.generation.expectedCount;
+      state.generation.allowFillExisting = Boolean(job.allow_fill_existing);
+      $("#generation-count").value = state.generation.expectedCount;
+      if (job.density) $("#generation-density").value = job.density;
+      $("#generation-fill-existing").checked = state.generation.allowFillExisting;
+      if (job.status === "pending" || job.status === "running") {
+        $("#generation-status").textContent = "正在生成…";
+        await waitForGenerationPoll(1500);
+        continue;
+      }
+      const result = job.result || { valid: false, raw: "", errors: ["生成任务没有返回结果"], expected: "" };
+      state.generation.jobId = null;
+      showGenerationResult(result);
+      const label = job.status === "failed" ? "生成失败" : (result.valid ? "草稿已生成" : "草稿需要修正");
+      setGenerationBusy(false, label);
+      return;
+    } catch (error) {
+      if (pollToken !== generationPollToken) return;
+      failures += 1;
+      if (failures >= 5) {
+        toast(`${t("actionFailed")}: ${error.message}`, true);
+        setGenerationBusy(false, "状态查询失败");
+        return;
+      }
+      $("#generation-status").textContent = `连接中断，正在重试（${failures}/5）…`;
+      await waitForGenerationPoll(1500 * failures);
+    }
   }
 }
 
@@ -757,7 +815,10 @@ function bindEvents() {
   $("#generation-submit").onclick = generateNetworkDraft;
   $("#generation-validate").onclick = validateGenerationRaw;
   $("#generation-apply").onclick = applyGenerationDraft;
-  $("#generation-dialog").addEventListener("close", () => { $("#generation-hint").value = ""; });
+  $("#generation-dialog").addEventListener("close", () => {
+    generationPollToken += 1;
+    $("#generation-hint").value = "";
+  });
   $("#add-alias-button").onclick = () => { state.editingAliases.push({ alias: "", use_count: 1, last_used_at: "" }); renderAliasEditor(); $("#character-aliases .alias-row:last-child .alias-name")?.focus(); };
   $("#add-relation-button").onclick = () => openRelationshipDialog();
   $("#add-life-event-button").onclick = () => openLifeEventDialog();
