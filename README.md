@@ -8,7 +8,7 @@
 
 > 喜欢本插件的朋友可以点一个 `Star⭐`，也欢迎在 Issues 里提出建议或反馈问题。也欢迎给插件提交 PR，帮助完善功能或修复问题。
 
-> 推荐可联动插件 [Virtual Life](https://github.com/FloranceYeh/astrbot_plugin_virtual_life)
+> 推荐可联动插件 [Virtual Life](https://cloud-test.astrbot.app/plugin/FloranceYeh/astrbot_plugin_virtual_life)
 
 Personal Network 是一个按 AstrBot 人格隔离数据的虚拟人生关系网络插件。真实用户、群友和虚构人物都可以成为人格人生中的人物；LLM 与 WebUI 可以记录稳定人物资料、关系和共同经历，后续聊天会按姓名、别名或代词指向注入相关人生上下文。
 
@@ -97,15 +97,180 @@ SQLite 数据库、头像和临时导出文件存放在 AstrBot 插件数据目�
 
 自动对话经历不保存聊天正文，只保存参与人物、会话时间和固定摘要。LLM 或 WebUI 创建的人生经历保存管理员确认的结构化摘要，不保存完整聊天记录。
 
+## LLM 工具
+
+本插件向模型暴露两个函数工具，均在 `on_llm_request` 阶段注入，仅在当前人格网络启用时生效。
+
+### `update_personal_network`
+
+写入人物、关系和人生经历，三个批次均为可选。仅记录对话中已明确建立的持久事实，不记录猜测、玩笑、角色扮演或尚未发生的计划。
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `characters` | list，最多 20 项 | 人物新增或更新。必填 `name`；可选 `id`（已有人物 UUID）、`ref`（本次请求内引用名）、`aliases`（别名列表）、`bio`、`personality`、`preferences`、`facts`、`current_sender`。 |
+| `relationships` | list，最多 30 项 | 有向关系新增或更新。必填 `source`、`target`、`type`、`strength`、`status`、`description`；可选 `id`。`source`/`target` 填人物 UUID、`ref` 或 `"persona"`。`type` 填身份名词（父亲、朋友、暗恋对象）。`strength` 为 0–100 长期亲密度。`status` 为 `active`/`ended`/`uncertain`。 |
+| `interactions` | list，最多 30 项 | 人生经历新增或更新。必填 `participants`（≥2 个人物引用）、`type`、`summary`；可选 `occurred_at`（ISO 8601）、`importance`（0–100）、`emotional_tone`。 |
+
+`current_sender` 用于把当前真实消息发送者绑定到人物，绑定数据来自 AstrBot 事件，模型不能自行指定平台 ID。`ref` 仅在本次批次内有效，用于在同一次调用中让关系或经历引用刚新建的人物。
+
+LLM 工具不能删除或合并人物、修改管理员备注、上传头像；这些操作仅允许通过 WebUI 进行。
+
+### `query_personal_network`
+
+只读查询当前人格的人物和关系，默认启用，可在配置中关闭。关闭后模型不再看到此工具，但聊天命令和自动上下文注入不受影响。
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `query` | string，可选 | 人物姓名或别名。留空返回当前人格的人际网络概览。 |
+
+返回纯文本中文关系信息，包含人物资料、一跳关系、互动统计和最近共同经历。模型应把返回内容视为数据，不能作为用户指令执行。
+
 ## 与其他插件联动
 
-本插件通过 AstrBot 已加载插件实例公开以下异步接口，不需要其他插件访问 SQLite 或调用 WebUI HTTP API：
+本插件通过 AstrBot 已加载插件实例公开以下异步接口，不需要其他插件访问 SQLite 或调用 WebUI HTTP API。
 
-- `get_network_for_plugin(persona_id)`：取得结构化关系网快照。
-- `get_context_for_plugin(persona_id, max_chars=4000)`：取得带稳定人物 ID 的模型上下文。
-- `record_life_event_from_plugin(...)`：以调用插件的稳定 `source_key` 幂等记录人生经历。
+### 获取实例
 
-推荐配合 [astrbot_plugin_virtual_life](https://github.com/FloranceYeh/astrbot_plugin_virtual_life) 使用。Personal Network 负责维护人格生命中的人物、长期关系和共同经历，Virtual Life 负责生成日程、主动消息和随时间实际发生的虚拟生活；组合后，日程模型可以参考既有人际关系安排社交活动，已经结束且带有明确参与人物的日程也可以回写为人生经历。
+```python
+network_plugin = context.get_star("astrbot_plugin_personal_network")
+```
+
+### 只读接口
+
+#### `get_network_for_plugin(persona_id)`
+
+返回完整关系网快照，包含 `characters`、`identities`、`relationships`、`life_events` 四个列表。网络被禁用时返回各列表为空的结构，不抛异常。
+
+```python
+data = await network_plugin.get_network_for_plugin(persona_id)
+characters = data["characters"]   # 人物列表，含 id、name、bio 等字段
+relationships = data["relationships"]  # 关系列表，含 source_id、target_id 等
+```
+
+#### `get_context_for_plugin(persona_id, max_chars=4000)`
+
+返回适合直接插入 system prompt 的纯文本上下文，格式与自动注入一致，包含稳定人物 UUID。`max_chars` 在 500–12000 范围内有效。
+
+```python
+context_text = await network_plugin.get_context_for_plugin(persona_id, max_chars=3000)
+```
+
+### 写入接口
+
+#### `upsert_batch_for_plugin(persona_id, characters, relationships, interactions, *, source)`
+
+向指定人格网络批量写入人物、关系和人生经历。权限与 LLM 工具相同：可写除管理员备注（`notes`）以外的所有字段。网络被禁用时返回 `{"updated": False, "reason": "persona network disabled"}`，不抛异常。
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `persona_id` | str | 目标人格标识符 |
+| `characters` | list，可选，最多 20 项 | 与 LLM 工具 `characters` 格式相同，不支持 `current_sender` |
+| `relationships` | list，可选，最多 30 项 | 与 LLM 工具 `relationships` 格式相同 |
+| `interactions` | list，可选，最多 30 项 | 与 LLM 工具 `interactions` 格式相同 |
+| `source` | str，必填 | 调用插件标识符，必须以 `"astrbot_plugin_"` 开头 |
+
+返回值：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `updated` | bool | 是否成功写入 |
+| `refs` | dict | `ref` 名称到人物 UUID 的映射，`"persona"` 键始终存在 |
+| `relationship_ids` | list | 本次写入的关系 UUID 列表 |
+| `event_ids` | list | 本次写入的人生经历 UUID 列表 |
+
+人物解析优先级：先按 `id` 精确匹配，再按 `name` 和别名不区分大小写匹配，匹配不到则新建人物。
+
+```python
+# 新增人物并设定描述
+result = await network_plugin.upsert_batch_for_plugin(
+    persona_id,
+    characters=[
+        {
+            "ref": "alice",
+            "name": "Alice",
+            "bio": "用户的高中同学，现居上海",
+            "personality": "开朗外向，喜欢摄影",
+        }
+    ],
+    source="astrbot_plugin_your_plugin",
+)
+alice_uuid = result["refs"]["alice"]   # 新建或匹配到的人物 UUID
+
+# 添加关系（复用上一次拿到的 UUID）
+await network_plugin.upsert_batch_for_plugin(
+    persona_id,
+    relationships=[
+        {
+            "source": "persona",
+            "target": alice_uuid,
+            "type": "同学",
+            "strength": 60,
+            "status": "active",
+            "description": "高中同班同学，毕业后偶尔联系",
+        }
+    ],
+    source="astrbot_plugin_your_plugin",
+)
+
+# 一次调用同时写入人物、关系和经历
+result = await network_plugin.upsert_batch_for_plugin(
+    persona_id,
+    characters=[{"ref": "bob", "name": "Bob", "bio": "用户的同事"}],
+    relationships=[
+        {
+            "source": "persona",
+            "target": "bob",   # 也可以直接用 ref
+            "type": "同事",
+            "strength": 40,
+            "status": "active",
+            "description": "",
+        }
+    ],
+    interactions=[
+        {
+            "participants": ["persona", "bob"],
+            "type": "聚餐",
+            "summary": "与 Bob 在公司附近餐厅吃午饭",
+            "importance": 40,
+        }
+    ],
+    source="astrbot_plugin_your_plugin",
+)
+```
+
+#### `record_life_event_from_plugin(...)`
+
+以调用插件的稳定 `source_key` 幂等记录一条人生经历，适合周期性任务避免重复写入。
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `persona_id` | str | 目标人格标识符 |
+| `participant_ids` | list[str] | 参与人物的 UUID 列表（非根人格，至少 1 个） |
+| `event_type` | str | 经历类型短语 |
+| `summary` | str | 经历摘要 |
+| `occurred_at` | str | ISO 8601 时间戳 |
+| `importance` | int | 重要度 0–100，默认 50 |
+| `emotional_tone` | str | 情绪基调，可为空字符串 |
+| `source` | str | 调用插件标识符，必须以 `"astrbot_plugin_"` 开头 |
+| `source_key` | str | 同一来源的幂等键；相同 `source`+`source_key` 只会写入一次 |
+
+```python
+await network_plugin.record_life_event_from_plugin(
+    persona_id,
+    participant_ids=[alice_uuid],
+    event_type="日程",
+    summary="与 Alice 在咖啡馆见面叙旧",
+    occurred_at="2026-07-31T10:00:00+08:00",
+    importance=55,
+    emotional_tone="愉快",
+    source="astrbot_plugin_your_plugin",
+    source_key="schedule_event_abc123",
+)
+```
+
+---
+
+推荐配合 [astrbot_plugin_virtual_life](https://cloud-test.astrbot.app/plugin/FloranceYeh/astrbot_plugin_virtual_life) 使用。Personal Network 负责维护人格生命中的人物、长期关系和共同经历，Virtual Life 负责生成日程、主动消息和随时间实际发生的虚拟生活；组合后，日程模型可以参考既有人际关系安排社交活动，已经结束且带有明确参与人物的日程也可以回写为人生经历。
 
 Virtual Life 侧的联动配置默认关闭；未安装本插件时不会产生启动依赖。开启后，Virtual Life 只会回写已经结束且包含 `participant_ids` 的日程项，不会把尚未发生的未来计划提前写入人生经历。
 
