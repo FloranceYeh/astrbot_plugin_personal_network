@@ -535,6 +535,69 @@ class PersonalNetworkPlugin(Star):
             source_key=source_key,
         )
 
+    async def upsert_batch_for_plugin(
+        self,
+        persona_id: str,
+        characters: list[dict[str, Any]] | None = None,
+        relationships: list[dict[str, Any]] | None = None,
+        interactions: list[dict[str, Any]] | None = None,
+        *,
+        source: str,
+    ) -> dict[str, Any]:
+        """Upsert characters, relationships, and interactions from another plugin.
+
+        Applies the same trust level as the built-in LLM tool: all character and
+        relationship fields are writable except ``notes``.  The persona network must
+        be enabled; a disabled network returns ``{"updated": False}`` without raising.
+
+        Character objects follow the same schema as ``update_personal_network``:
+        optional ``id`` (existing UUID) or ``name`` for lookup/creation, plus ``ref``
+        for request-local cross-references.  ``current_sender`` is not supported here;
+        pass ``None`` or omit the key.
+
+        Args:
+            persona_id: Target AstrBot persona identifier.
+            characters: Character upserts, at most 20.  Each object accepts ``id``,
+                ``ref``, ``name``, ``aliases``, ``bio``, ``personality``,
+                ``preferences``, and ``facts``.
+            relationships: Directed relationship upserts, at most 30.  Each object
+                needs ``source``, ``target``, ``type``, ``strength``, ``status``, and
+                ``description``; ``id`` is optional.  ``source`` / ``target`` accept a
+                character UUID, a request-local ``ref``, or the literal ``"persona"``.
+            interactions: Life-event upserts, at most 30.  Each object needs
+                ``participants``, ``type``, and ``summary``; optional keys are
+                ``occurred_at``, ``importance``, and ``emotional_tone``.
+            source: Calling plugin identifier; must start with ``"astrbot_plugin_"``.
+
+        Returns:
+            Dict with keys ``updated`` (bool), ``refs`` (name→UUID mapping),
+            ``relationship_ids`` (list), and ``event_ids`` (list).  When the network
+            is disabled, only ``{"updated": False, "reason": "persona network disabled"}``
+            is returned.
+
+        Raises:
+            ValueError: If ``persona_id`` is empty, ``source`` is not a valid plugin
+                identifier, or any batch item is structurally invalid.
+        """
+        persona_id = str(persona_id or "").strip()
+        if not persona_id:
+            raise ValueError("persona_id is required")
+        if not str(source or "").strip().startswith("astrbot_plugin_"):
+            raise ValueError("source must identify an AstrBot plugin")
+        await asyncio.to_thread(self.storage.ensure_network, persona_id, persona_id)
+        if not await asyncio.to_thread(self.storage.is_enabled, persona_id):
+            return {"updated": False, "reason": "persona network disabled"}
+        result = await asyncio.to_thread(
+            self.storage.upsert_batch,
+            persona_id,
+            list(characters or []),
+            list(relationships or []),
+            list(interactions or []),
+            sender=None,
+            allow_notes=False,
+        )
+        return {"updated": True, **result}
+
     @filter.command("关系查询", alias={"查询关系", "人际关系"})
     async def query_relationship_command(
         self, event: AstrMessageEvent, query=GreedyStr
