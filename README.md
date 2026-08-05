@@ -285,3 +285,7 @@ uv run ruff check data/plugins/astrbot_plugin_personal_network
 ```
 
 内置 Cytoscape.js 3.33.1，MIT 许可证位于 `pages/network/vendor/`。
+
+## 许可证
+
+本项目基于 [GNU General Public License v3.0](LICENSE) 授权。
